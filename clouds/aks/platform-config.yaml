@@ -1,0 +1,19 @@
+# =============================================================================
+# AKS platform config (platform-team owned). KRO reads this.
+# -----------------------------------------------------------------------------
+# The GenAIOps RGD references this ConfigMap as a read-only externalRef and
+# folds `storageClass` into every GenAIService's PVC. This is how KRO -- not the
+# Kubernetes default-StorageClass mechanism -- resolves the per-cluster storage
+# choice. On an "AKS" cluster that value is `managed-csi`.
+#
+# Pairs with clouds/aks/storageclass.yaml, which actually creates the
+# `managed-csi` StorageClass this names. The product team never sees either.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: genaiops-platform-config
+  labels:
+    demo.genaiops/cloud: aks
+data:
+  storageClass: managed-csi

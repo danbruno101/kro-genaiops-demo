@@ -1,0 +1,19 @@
+# =============================================================================
+# GKE platform config (platform-team owned). KRO reads this.
+# -----------------------------------------------------------------------------
+# The GenAIOps RGD references this ConfigMap as a read-only externalRef and
+# folds `storageClass` into every GenAIService's PVC. This is how KRO -- not the
+# Kubernetes default-StorageClass mechanism -- resolves the per-cluster storage
+# choice. On a "GKE" cluster that value is `premium-rwo`.
+#
+# Pairs with clouds/gke/storageclass.yaml, which actually creates the
+# `premium-rwo` StorageClass this names. The product team never sees either.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: genaiops-platform-config
+  labels:
+    demo.genaiops/cloud: gke
+data:
+  storageClass: premium-rwo
