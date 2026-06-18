@@ -21,6 +21,13 @@ on both clusters. The product instance is byte-identical on both.
 > Everything runs GPU-free on a laptop. On real GKE/AKS clusters the only change
 > is the StorageClass provisioner (CSI driver); see `clouds/README.md`.
 
+> **Live demo on real clusters?** The contexts below (`kind-genaiops-gke/aks`) are
+> the local/CI flow. For the real-cloud live demo, provision GKE + AKS per
+> `docs/PROVISION-REAL-CLUSTERS.md` (which names the contexts **`gke`** and
+> **`aks`**) and run `./scripts/deploy-multicloud-real.sh` instead of the kind
+> setup below. Every beat after that is identical — just use `--context gke` /
+> `--context aks` in place of the `kind-genaiops-*` contexts.
+
 ---
 
 ## T-minus (before you walk on)
@@ -190,6 +197,6 @@ Open these three, in order:
   and check the value KRO will read:
   `kubectl --context kind-genaiops-gke get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}{"\n"}'`.
 - **`ImagePullBackOff`:** the mock image didn't load. Re-run
-  `kind load docker-image genaiops/mock-vllm:demo --name genaiops-gke`.
+  `kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name genaiops-gke`.
 - **Total fallback:** this runbook narrates the whole flow without a live
   cluster — the contrast is in the files, not the demo gods.

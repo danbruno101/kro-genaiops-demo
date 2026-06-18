@@ -204,7 +204,7 @@ kubectl get genaiservice                    # use-case 1 still running
 - **CRD not registered yet:** `kubectl get rgd` — wait for `ACTIVE`. The setup
   script already waits, but if you re-applied, give it ~10s.
 - **Pod ImagePullBackOff:** the mock image didn't load into kind. Re-run:
-  `kind load docker-image genaiops/mock-vllm:demo --name genaiops-demo`
+  `kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name genaiops-demo`
 - **Prometheus target missing:** the pod needs `monitoring: true` (default) and
   ~10s to be scraped. Check `kubectl get svc -l genaiops.kro.run/scrape=true`.
 - **Fine-tuning: serving stuck at 0:** that's the gate working. In manual mode

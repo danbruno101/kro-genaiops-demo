@@ -45,7 +45,7 @@ say "kro version for every cluster: ${KRO_VERSION:-<latest-resolve-failed>}"
 
 # Build the mock-vllm image once; we load the same artifact into each cluster.
 say "Building the mock-vllm image (built once, loaded into every cluster)"
-docker build -t genaiops/mock-vllm:demo "${REPO}/monitoring/mock-vllm"
+docker build -t ghcr.io/danbruno101/mock-vllm:demo "${REPO}/monitoring/mock-vllm"
 
 provision() {
   local cluster="$1" cloud="$2" region="$3"
@@ -76,7 +76,7 @@ provision() {
   kubectl --context "${ctx}" wait --for=condition=Available deploy -n kro --all --timeout=120s || true
 
   note "Loading the mock-vllm image into the cluster"
-  kind load docker-image genaiops/mock-vllm:demo --name "${cluster}" >/dev/null
+  kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name "${cluster}" >/dev/null
 
   note "Applying PLATFORM-TEAM environment config: clouds/${cloud}/"
   # Demote kind's built-in 'standard' so the cloud-named class is the sole default.
