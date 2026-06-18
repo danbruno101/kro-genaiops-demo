@@ -66,7 +66,8 @@ note at the bottom.
 | `scripts/setup.sh` / `teardown.sh` | One-command cluster up/down for use-case 1 (kind). |
 | `scripts/setup-finetune.sh` / `teardown-finetune.sh` | Layered up/down for use-case 2 (additive, independent). |
 | `docs/RUNBOOK.md` | **Minute-by-minute stage script.** Read this before presenting. |
-| `genaiops-kro-deck.pptx` | Talk deck: impact slide + two-panel architecture diagram (kind / EKS / GKE / AKS). |
+| `genaiops-kro-deck.pptx` | KubeCon talk deck (use-case 1): impact slide + two-panel architecture diagram (kind / EKS / GKE / AKS). |
+| `docs/maintainers-summit-deck.md` | Maintainers Summit deck (both use-cases), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/maintainers-summit-deck.md -o deck.pptx`. |
 
 ## The contrast, in numbers
 
