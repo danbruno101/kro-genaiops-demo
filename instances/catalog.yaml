@@ -1,0 +1,65 @@
+# =============================================================================
+# SELF-SERVICE CATALOG (talk beat #3)
+# -----------------------------------------------------------------------------
+# Three teams, three GenAIServices, ONE template behind them all. This is the
+# portability thesis made literal: the `mode` and `storageClass` fields are the
+# ONLY things that change between a laptop, an EKS GPU node, a GKE cluster, and
+# an AKS cluster. The shape of the YAML -- and the platform contract -- is identical everywhere.
+# Apply all three with: kubectl apply -f instances/catalog.yaml
+# =============================================================================
+---
+# Team A — runs on the conference laptop (kind, CPU-only, mock payload).
+apiVersion: kro.run/v1alpha1
+kind: GenAIService
+metadata:
+  name: summarizer
+spec:
+  name: summarizer
+  mode: mock
+  replicas: 1
+---
+# Team B — same template, "EKS profile": GPU + gp3 storage class.
+# On the kind stage this still schedules in mock mode if no GPU is present;
+# the POINT is the YAML didn't change shape between clouds.
+apiVersion: kro.run/v1alpha1
+kind: GenAIService
+metadata:
+  name: code-assistant
+spec:
+  name: code-assistant
+  mode: mock          # flip to "gpu" on the keynote GPU cluster
+  storageClass: ""    # gp3 on EKS, premium-rwo on GKE, managed-csi on AKS -- field, not rewrite
+  replicas: 2
+---
+# Team C — same template, "GKE profile": only the storageClass value differs.
+apiVersion: kro.run/v1alpha1
+kind: GenAIService
+metadata:
+  name: doc-search
+spec:
+  name: doc-search
+  mode: mock          # "gpu" on a GKE GPU node pool
+  storageClass: ""    # "premium-rwo" on GKE -- same field, different value
+  replicas: 1
+---
+# Team D — same template, "AKS profile": again, only the value changes.
+apiVersion: kro.run/v1alpha1
+kind: GenAIService
+metadata:
+  name: ticket-router
+spec:
+  name: ticket-router
+  mode: mock          # "gpu" on an AKS GPU node pool
+  storageClass: ""    # "managed-csi" on AKS -- same field, different value
+  replicas: 1
+---
+# Team E — monitoring deliberately off, to show the includeWhen toggle live.
+apiVersion: kro.run/v1alpha1
+kind: GenAIService
+metadata:
+  name: batch-classifier
+spec:
+  name: batch-classifier
+  mode: mock
+  monitoring: false
+  replicas: 1

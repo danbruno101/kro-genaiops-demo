@@ -1,0 +1,132 @@
+name: demo-smoke-test
+
+# Proves the GenAIOps demo actually works: stands up kind, installs kro from the
+# official chart, applies the RGD, creates a GenAIService instance, and asserts
+# that kro reconciled the underlying PVC / Deployment / Service. Green badge =
+# the abstraction in this repo holds against a real cluster.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLUSTER: genaiops-ci
+      # Pinned to a known-good kro release for deterministic CI.
+      # Verified against kubernetes-sigs/kro v0.9.1 (chart 0.9.1, Apr 2026).
+      # Bump deliberately after confirming the demo still reconciles on the new
+      # release; set to "" to instead resolve the latest release at run time.
+      KRO_VERSION: "0.9.1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: genaiops-ci
+          wait: 60s
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Resolve kro version
+        run: |
+          if [ -z "${KRO_VERSION}" ]; then
+            echo "No pin set; resolving latest kro release..."
+            KRO_VERSION="$(curl -sL https://api.github.com/repos/kubernetes-sigs/kro/releases/latest \
+              | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+            echo "KRO_VERSION=${KRO_VERSION}" >> "$GITHUB_ENV"
+          fi
+          echo "Using kro version: ${KRO_VERSION}"
+
+      - name: Install kro (official chart)
+        run: |
+          helm install kro oci://registry.k8s.io/kro/charts/kro \
+            --namespace kro --create-namespace \
+            ${KRO_VERSION:+--version "${KRO_VERSION}"} \
+            --wait --timeout 5m
+          kubectl wait --for=condition=Available deploy -n kro --all --timeout=180s
+
+      - name: Build and load mock-vllm image
+        run: |
+          docker build -t genaiops/mock-vllm:demo monitoring/mock-vllm
+          kind load docker-image genaiops/mock-vllm:demo --name "${CLUSTER}"
+
+      - name: Apply the ResourceGraphDefinition
+        run: |
+          kubectl apply -f rgd/genaiops-rgd.yaml
+          kubectl get rgd
+
+      - name: Wait for the generated GenAIService CRD to register
+        run: |
+          for i in $(seq 1 30); do
+            if kubectl get crd genaiservices.kro.run >/dev/null 2>&1; then
+              echo "GenAIService API is live."; exit 0
+            fi
+            echo "waiting for CRD... ($i)"; sleep 4
+          done
+          echo "::error::GenAIService CRD never registered"
+          kubectl describe rgd genaiservice.kro.run || true
+          exit 1
+
+      - name: Apply a GenAIService instance
+        run: |
+          kubectl apply -f instances/sentiment-api.yaml
+          kubectl get genaiservice
+
+      - name: Assert kro reconciled the child resources
+        run: |
+          set -e
+          echo "Waiting for the Deployment kro should have created..."
+          kubectl wait --for=condition=Available deploy/sentiment-api \
+            --timeout=180s
+
+          echo "Asserting all expected child resources exist..."
+          kubectl get pvc sentiment-api-cache
+          kubectl get deploy sentiment-api
+          kubectl get svc sentiment-api
+          kubectl get svc sentiment-api-metrics   # monitoring: true -> includeWhen fires
+
+          echo "Asserting replica count matches the instance (replicas: 2)..."
+          ready="$(kubectl get deploy sentiment-api -o jsonpath='{.status.readyReplicas}')"
+          test "${ready}" = "2"
+          echo "OK: ${ready}/2 replicas ready."
+
+      - name: Verify the served endpoint responds
+        run: |
+          kubectl port-forward svc/sentiment-api 8080:80 &
+          PF=$!; sleep 5
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -X POST localhost:8080/v1/chat/completions -d '{}')"
+          kill $PF || true
+          test "${code}" = "200"
+          echo "OK: endpoint returned HTTP ${code}."
+
+      - name: Smoke-test the catalog (multi-cloud profiles apply cleanly)
+        run: |
+          kubectl apply -f instances/catalog.yaml
+          kubectl get genaiservice
+          # batch-classifier has monitoring:false -> its metrics svc must be absent
+          if kubectl get svc batch-classifier-metrics >/dev/null 2>&1; then
+            echo "::error::includeWhen failed: metrics svc exists despite monitoring:false"
+            exit 1
+          fi
+          echo "OK: includeWhen toggle respected across catalog."
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all -A || true
+          kubectl describe rgd genaiservice.kro.run || true
+          kubectl get genaiservice -o yaml || true
+          kubectl logs -n kro deploy/kro --tail=100 || true

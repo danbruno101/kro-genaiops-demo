@@ -1,0 +1,110 @@
+# =============================================================================
+# THE "BEFORE" PICTURE — what a developer writes WITHOUT the GenAIOps template.
+# This is the same sentiment-api service expressed as raw KRM. Every field here
+# is something a non-Kubernetes-expert would have to know, get right, and keep
+# consistent across environments. The 10-line GenAIService replaces all of it.
+#
+# Show this file on screen, scroll it, then cut to instances/sentiment-api.yaml.
+# =============================================================================
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sentiment-api-cache
+  labels:
+    app: sentiment-api
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentiment-api
+  labels:
+    app: sentiment-api
+    app.kubernetes.io/managed-by: human
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sentiment-api
+  template:
+    metadata:
+      labels:
+        app: sentiment-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: server
+          image: genaiops/mock-vllm:demo
+          args: ["--model", "Qwen/Qwen2.5-0.5B-Instruct", "--mock"]
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: MODEL_NAME
+              value: "Qwen/Qwen2.5-0.5B-Instruct"
+            - name: SERVICE_NAME
+              value: "sentiment-api"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: cache
+              mountPath: /root/.cache
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: sentiment-api-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentiment-api
+  labels:
+    app: sentiment-api
+spec:
+  selector:
+    app: sentiment-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentiment-api-metrics
+  labels:
+    app: sentiment-api
+    genaiops.kro.run/scrape: "true"
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: sentiment-api
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: 8000
+---
+# ...and in a real platform you'd ALSO hand-maintain: a ServiceMonitor or
+# PodMonitor, an HPA, a PodDisruptionBudget, NetworkPolicies, and per-cloud
+# storageClass / accelerator variants of the Deployment above — multiplied by
+# every environment and every model. That combinatorial sprawl is the friction
+# the talk is about.
