@@ -129,8 +129,13 @@ def read_sa(name):
         return f.read().strip()
 
 
-def self_approve():
-    """PATCH spec.approved=true on this FineTuneModel via the in-cluster API."""
+def self_approve(retries=8, delay=3):
+    """PATCH spec.approved=true on this FineTuneModel via the in-cluster API.
+
+    Retries on transient 403s: the RoleBinding granting this ServiceAccount
+    patch access is created by kro alongside the Job, so it may not have
+    propagated yet when the run reaches this point.
+    """
     token = read_sa("token")
     namespace = read_sa("namespace")
     host = os.environ["KUBERNETES_SERVICE_HOST"]
@@ -138,18 +143,28 @@ def self_approve():
     url = (f"https://{host}:{port}/apis/kro.run/v1alpha1/namespaces/"
            f"{namespace}/finetunemodels/{INSTANCE}")
     ctx = ssl.create_default_context(cafile=os.path.join(SA_DIR, "ca.crt"))
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"spec": {"approved": True}}).encode(),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/merge-patch+json",
-        },
-        method="PATCH",
-    )
-    with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
-        if r.status in (200, 201):
-            log(f"GATE: auto-approved '{INSTANCE}' -> serving will scale up.")
+    for attempt in range(1, retries + 1):
+        req = urllib.request.Request(
+            url,
+            data=json.dumps({"spec": {"approved": True}}).encode(),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/merge-patch+json",
+            },
+            method="PATCH",
+        )
+        try:
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+                if r.status in (200, 201):
+                    log(f"GATE: auto-approved '{INSTANCE}' -> serving will scale up.")
+                    return
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403) and attempt < retries:
+                log(f"self-approval not authorized yet (RBAC propagating), "
+                    f"retry {attempt}/{retries}...")
+                time.sleep(delay)
+                continue
+            raise
 
 
 # --- The "training" run ------------------------------------------------------
