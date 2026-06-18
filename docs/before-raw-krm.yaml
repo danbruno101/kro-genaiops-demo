@@ -42,7 +42,7 @@ spec:
     spec:
       containers:
         - name: server
-          image: genaiops/mock-vllm:demo
+          image: ghcr.io/danbruno101/mock-vllm:demo
           args: ["--model", "Qwen/Qwen2.5-0.5B-Instruct", "--mock"]
           ports:
             - name: http

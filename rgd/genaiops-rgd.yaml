@@ -148,7 +148,7 @@ spec:
                 - name: server
                   # mock mode: a tiny OpenAI-compatible stub that also emits
                   # Prometheus metrics on :8000/metrics. gpu mode: swap to vLLM.
-                  image: '${schema.spec.mode == "gpu" ? "vllm/vllm-openai:latest" : "genaiops/mock-vllm:demo"}'
+                  image: '${schema.spec.mode == "gpu" ? "vllm/vllm-openai:latest" : "ghcr.io/danbruno101/mock-vllm:demo"}'
                   args: '${schema.spec.mode == "gpu" ? ["--model", schema.spec.model] : ["--model", schema.spec.model, "--mock"]}'
                   ports:
                     - name: http
