@@ -1,0 +1,22 @@
+# =============================================================================
+# The entire developer experience for fine-tuning. Ten lines. No Job, no RBAC,
+# no PVC, no MLflow wiring, no serving Deployment, no drift Deployment, no
+# Prometheus annotations. The developer never sees KRM.
+#
+# This team chose approvalPolicy: auto -- the platform trains, evaluates, and
+# (only if the model clears evalThreshold) promotes it to serving automatically.
+# This same file applies identically on kind, EKS, GKE, and AKS.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: FineTuneModel
+metadata:
+  name: sentiment-tuned
+spec:
+  name: sentiment-tuned
+  baseModel: "Qwen/Qwen2.5-0.5B-Instruct"
+  dataset: "support-tickets-v3"
+  epochs: 3
+  approvalPolicy: auto       # auto-promote once eval_accuracy >= evalThreshold
+  evalThreshold: "0.80"
+  servingReplicas: 2
+  driftDetection: true

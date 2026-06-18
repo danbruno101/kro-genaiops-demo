@@ -53,12 +53,18 @@ note at the bottom.
 
 | Path | Role in the talk |
 |------|------------------|
-| `rgd/genaiops-rgd.yaml` | **Platform team artifact.** Defines the `GenAIService` API via one ResourceGraphDefinition. |
+| `rgd/genaiops-rgd.yaml` | **Use-case 1 platform artifact.** Defines the `GenAIService` (serving) API via one ResourceGraphDefinition. |
 | `instances/sentiment-api.yaml` | **The developer experience.** 9 lines of real config. The payoff. |
 | `instances/catalog.yaml` | **Self-service catalog.** Three teams, one template — the portability thesis. |
 | `docs/before-raw-krm.yaml` | **The "before."** 92 lines of raw KRM the template replaces. |
-| `monitoring/` | Lightweight Prometheus + the mock-vllm image source. |
-| `scripts/setup.sh` / `teardown.sh` | One-command cluster up/down (kind). |
+| `rgd/finetune-rgd.yaml` | **Use-case 2 platform artifact.** Defines the `FineTuneModel` (train → register → gate → serve → drift) API. |
+| `instances/sentiment-finetune.yaml` / `fraud-finetune.yaml` | Fine-tuning developer experience — auto-approval and the manual gate. |
+| `instances/finetune-catalog.yaml` | Fine-tuning self-service catalog — the portability thesis for use-case 2. |
+| `docs/before-raw-finetune-krm.yaml` | The raw KRM the `FineTuneModel` template replaces. |
+| `docs/ADDING-A-USE-CASE.md` | **The module convention.** How a use-case 3 drops in without touching 1 or 2. |
+| `monitoring/` | Lightweight Prometheus, MLflow, and the mock-vllm / mock-trainer / mock-drift image sources. |
+| `scripts/setup.sh` / `teardown.sh` | One-command cluster up/down for use-case 1 (kind). |
+| `scripts/setup-finetune.sh` / `teardown-finetune.sh` | Layered up/down for use-case 2 (additive, independent). |
 | `docs/RUNBOOK.md` | **Minute-by-minute stage script.** Read this before presenting. |
 | `genaiops-kro-deck.pptx` | Talk deck: impact slide + two-panel architecture diagram (kind / EKS / GKE / AKS). |
 
@@ -78,6 +84,64 @@ kubectl get genaiservice sentiment-api -w
 ```
 
 Then follow `docs/RUNBOOK.md` for the full demo flow.
+
+## Second use-case: fine-tuning (`FineTuneModel`)
+
+The same pattern generalizes beyond serving. A second, **independent**
+ResourceGraphDefinition (`rgd/finetune-rgd.yaml`) gives product teams the whole
+fine-tuning lifecycle from ~10 lines of YAML:
+
+1. a **training run** whose infrastructure they pick (`trainMode` mock↔gpu,
+   `epochs`),
+2. **Apache MLflow** registering the run, its metrics, and the produced model
+   (deployed once as shared platform infra, `monitoring/mlflow.yaml`),
+3. an **evaluation + approval gate** — `approvalPolicy: auto` promotes the model
+   to serving only if `eval_accuracy >= evalThreshold`; `approvalPolicy: manual`
+   (the default guardrail) keeps serving at **0 replicas** until a data scientist
+   reviews the metrics in MLflow and sets `approved: true`,
+4. **serving** of the fine-tuned model (only once approved),
+5. **drift detection** once live (`genaiops_drift_score`), and
+6. **Prometheus** observability — auto-scraped via the same annotations, no
+   Prometheus config change.
+
+The approval gate is the compliance story made concrete: promotion to production
+is an explicit, auditable one-field change, not a side effect of training. In
+auto mode the train+eval Job performs that change itself (PATCHing the instance
+via a least-privilege ServiceAccount) only when the model clears the bar.
+
+Portability carries over unchanged: `instances/finetune-catalog.yaml` runs the
+*same* `FineTuneModel` template across kind / EKS / GKE / AKS profiles, with only
+`trainMode` / `servingMode` and `storageClass` differing. The control plane
+(MLflow at `http://mlflow:5000`, Prometheus) is identical on every cloud.
+
+Compare `instances/sentiment-finetune.yaml` (~10 lines) against
+`docs/before-raw-finetune-krm.yaml` (the raw KRM — a Job, RBAC, a PVC, two
+Deployments, two Services, MLflow wiring, and hand-gated approval) for the
+cognitive-load contrast.
+
+### Independence (and no vendor lock-in)
+
+Each use-case is its own CRD with its own kro controller; adding or deleting one
+RGD has zero effect on the other. `setup.sh` (use-case 1) has **no** dependency
+on MLflow or the fine-tuning RGD. This is how teams self-onboard on a vendor-
+neutral platform — see `docs/ADDING-A-USE-CASE.md` for the template a future
+use-case 3 follows without touching use-cases 1 or 2.
+
+## Running the demos
+
+Each use-case runs independently, so you can show one or both:
+
+```bash
+# Use-case 1 only (the KubeCon talk — simplest):
+./scripts/setup.sh
+
+# Both use-cases (the Maintainer Summit — adds MLflow + fine-tuning + drift):
+./scripts/setup.sh && ./scripts/setup-finetune.sh
+```
+
+`scripts/setup-finetune.sh` is additive and idempotent; `scripts/teardown-finetune.sh`
+removes just use-case 2 (instances, RGD, MLflow) without touching use-case 1 or
+the cluster.
 
 ## How portability actually works here
 

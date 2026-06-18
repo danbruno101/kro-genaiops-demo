@@ -63,3 +63,6 @@ echo
 echo "Next, demo the developer experience with:"
 echo "  kubectl apply -f instances/sentiment-api.yaml"
 echo "  kubectl get genaiservice sentiment-api -w"
+echo
+echo "Want the second use-case (fine-tuning + MLflow + drift)? Layer it on with:"
+echo "  ./scripts/setup-finetune.sh"
