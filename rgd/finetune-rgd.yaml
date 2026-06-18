@@ -64,8 +64,10 @@ spec:
       monitoring: boolean | default=true
     status:
       # Surfaced back onto the FineTuneModel object for `kubectl get`.
+      # NOTE: status expressions may only reference resource IDs (trainJob,
+      # service, servingDeployment ...), not schema.spec -- kro rejects the RGD
+      # otherwise. The approval state is already visible via `spec.approved`.
       trainingComplete: '${trainJob.status.succeeded}'
-      approved: '${schema.spec.approved}'
       endpoint: '${service.spec.clusterIP}'
       readyReplicas: '${servingDeployment.status.readyReplicas}'
 
