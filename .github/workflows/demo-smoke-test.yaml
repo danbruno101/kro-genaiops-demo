@@ -117,13 +117,23 @@ jobs:
 
       - name: Verify the served endpoint responds
         run: |
-          kubectl port-forward svc/sentiment-api 8080:80 &
-          PF=$!; sleep 5
-          code="$(curl -s -o /dev/null -w '%{http_code}' \
-            -X POST localhost:8080/v1/chat/completions -d '{}')"
-          kill $PF || true
-          test "${code}" = "200"
-          echo "OK: endpoint returned HTTP ${code}."
+          # A single curl after a fixed `sleep` is the classic CI flake: the
+          # background port-forward may not be serving yet (curl gets 000), or
+          # it dies mid-run. Retry, re-establishing the forward each attempt so
+          # a dead/not-yet-ready forward self-heals instead of failing the job.
+          ok=""
+          for i in $(seq 1 30); do
+            kubectl port-forward svc/sentiment-api 8080:80 >/dev/null 2>&1 &
+            PF=$!; sleep 2
+            code="$(curl -s -o /dev/null -w '%{http_code}' \
+              -X POST localhost:8080/v1/chat/completions -d '{}' || true)"
+            kill $PF 2>/dev/null || true; wait $PF 2>/dev/null || true
+            if [ "${code}" = "200" ]; then
+              ok=1; echo "OK: endpoint returned HTTP ${code}."; break
+            fi
+            echo "endpoint not ready (HTTP ${code}); retry ${i}/30..."; sleep 2
+          done
+          test -n "${ok}"
 
       - name: Smoke-test the catalog (multi-cloud profiles apply cleanly)
         run: |
@@ -234,13 +244,21 @@ jobs:
           kubectl wait --for=condition=complete job/sentiment-tuned-train --timeout=240s
 
           echo "Asserting the model was registered in MLflow..."
-          kubectl port-forward svc/mlflow 5000:5000 &
-          PF=$!; sleep 5
-          code="$(curl -s -o /dev/null -w '%{http_code}' \
-            'localhost:5000/api/2.0/mlflow/registered-models/get?name=sentiment-tuned')"
-          kill $PF || true
-          test "${code}" = "200"
-          echo "OK: MLflow has registered model 'sentiment-tuned' (HTTP ${code})."
+          # Registration is best-effort inside the trainer, and the port-forward
+          # needs a moment to start serving -- poll instead of a one-shot curl,
+          # re-establishing the forward each attempt so it self-heals.
+          ok=""
+          for i in $(seq 1 30); do
+            kubectl port-forward svc/mlflow 5000:5000 >/dev/null 2>&1 &
+            PF=$!; sleep 2
+            code="$(curl -s -o /dev/null -w '%{http_code}' \
+              'localhost:5000/api/2.0/mlflow/registered-models/get?name=sentiment-tuned' || true)"
+            kill $PF 2>/dev/null || true; wait $PF 2>/dev/null || true
+            if [ "${code}" = "200" ]; then ok=1; break; fi
+            echo "model not registered yet (HTTP ${code}); retry ${i}/30..."; sleep 2
+          done
+          test -n "${ok}"
+          echo "OK: MLflow has registered model 'sentiment-tuned'."
 
           echo "Asserting auto-approval scaled serving up (replicas: 2)..."
           kubectl wait --for=condition=Available deploy/sentiment-tuned --timeout=240s
