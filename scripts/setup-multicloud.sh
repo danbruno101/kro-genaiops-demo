@@ -78,13 +78,15 @@ provision() {
   note "Loading the mock-vllm image into the cluster"
   kind load docker-image genaiops/mock-vllm:demo --name "${cluster}" >/dev/null
 
-  note "Applying PLATFORM-TEAM environment config: clouds/${cloud}/ (default StorageClass)"
+  note "Applying PLATFORM-TEAM environment config: clouds/${cloud}/"
   # Demote kind's built-in 'standard' so the cloud-named class is the sole default.
   if kubectl --context "${ctx}" get storageclass standard >/dev/null 2>&1; then
     kubectl --context "${ctx}" patch storageclass standard \
       -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' >/dev/null
   fi
   kubectl --context "${ctx}" apply -f "${scfile}" >/dev/null
+  # The ConfigMap KRO reads (externalRef) to resolve this cluster's StorageClass.
+  kubectl --context "${ctx}" apply -f "${REPO}/clouds/${cloud}/platform-config.yaml" >/dev/null
 
   note "Deploying Prometheus (monitoring beat)"
   kubectl --context "${ctx}" apply -f "${REPO}/monitoring/prometheus.yaml" >/dev/null

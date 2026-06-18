@@ -66,7 +66,7 @@ note at the bottom.
 | `scripts/setup.sh` / `teardown.sh` | One-command cluster up/down for use-case 1 (kind). |
 | `scripts/setup-finetune.sh` / `teardown-finetune.sh` | Layered up/down for use-case 2 (additive, independent). |
 | `scripts/setup-multicloud.sh` / `teardown-multicloud.sh` | **The portability thesis, live.** Stands up two kind clusters that stand in for two clouds (GKE / AKS) and moves the same workload between them. |
-| `clouds/` | **Platform-team environment config.** The only place cloud details live (per-cluster default StorageClass) — never the RGD, never an instance. See `clouds/README.md`. |
+| `clouds/` | **Platform-team environment config.** The only place cloud details live — a per-cluster `genaiops-platform-config` ConfigMap KRO reads (via `externalRef`) to resolve the StorageClass, plus that StorageClass. Never the RGD, never an instance. See `clouds/README.md`. |
 | `docs/MULTICLOUD.md` | **Minute-by-minute multi-cloud runbook.** Deploy one spec to "GKE", move it to "AKS", no diff. |
 | `docs/RUNBOOK.md` | **Minute-by-minute stage script.** Read this before presenting. |
 | `genaiops-kro-deck.pptx` | KubeCon talk deck (use-case 1): impact slide + two-panel architecture diagram (kind / EKS / GKE / AKS). |
@@ -166,10 +166,12 @@ point:
 
 - **Product teams** ship one ~9-line instance and never name a cloud or a
   StorageClass — so they never think about where it runs.
-- **The platform team** owns the environment: each cluster's *default*
-  StorageClass is set from `clouds/<cloud>/` (`premium-rwo` for GKE,
-  `managed-csi` for AKS). Moving a workload to another cloud is switching the
-  `kubectl --context`; the spec and the RGD don't change.
+- **The platform team** owns the environment in `clouds/<cloud>/`: a
+  `genaiops-platform-config` ConfigMap (and the StorageClass it names —
+  `premium-rwo` for GKE, `managed-csi` for AKS). **KRO** resolves the per-cluster
+  storage by reading that ConfigMap via a read-only `externalRef` and folding the
+  value into each workload's PVC. Moving a workload to another cloud is switching
+  the `kubectl --context`; the spec and the RGD don't change.
 
 The cloud-specific detail is isolated to `clouds/` (platform-team owned) — it
 never leaks into the RGD or any instance. Follow `docs/MULTICLOUD.md` for the
@@ -180,12 +182,15 @@ instance at that kubeconfig context.
 
 ## How portability actually works here
 
-The RGD exposes `mode` (`mock`|`gpu`) and `storageClass` as **schema fields**.
-Moving from a laptop to an EKS, GKE, or AKS GPU node means changing those
-*values* in the
-10-line instance — not editing manifests, not re-templating, not forking the RGD.
-CEL conditionals in the RGD (`${schema.spec.mode == "gpu" ? ... : ...}`) fold the
-environment differences into the template once, so developers never see them.
+The RGD exposes `mode` (`mock`|`gpu`) as a **schema field** a developer can set,
+and resolves `storageClass` per cluster by reading the platform team's
+`genaiops-platform-config` ConfigMap (a read-only `externalRef`) — with an
+optional `spec.storageClass` developer override on top. Moving from a laptop to
+an EKS, GKE, or AKS GPU node means changing a *value* (the instance's `mode`, or
+the cluster's ConfigMap) — not editing manifests, not re-templating, not forking
+the RGD. CEL conditionals in the RGD (`${schema.spec.mode == "gpu" ? ... : ...}`)
+fold the environment differences into the template once, so developers never see
+them.
 
 ## Notes
 

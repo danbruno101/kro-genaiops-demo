@@ -30,7 +30,9 @@ spec:
       mode: string | default="mock"
       # Storage size for the model cache PVC.
       cacheSize: string | default="8Gi"
-      # Optional: override the cluster's default StorageClass. Empty = default.
+      # Optional developer override. Empty (the default) defers to the platform
+      # team's per-cluster choice in the genaiops-platform-config ConfigMap,
+      # which in turn defers to the cluster default when it too is empty.
       storageClass: string | default=""
       # Toggle Prometheus scraping wiring on/off.
       monitoring: boolean | default=true
@@ -53,20 +55,39 @@ spec:
   # name (${schema.spec.name}-cache); kro creates both concurrently, the Pod gets
   # scheduled, and that triggers the PVC to bind. No manual ordering, no deadlock.
   resources:
+    # 0) Platform config (READ-ONLY external reference, owned by the platform
+    #    team, one per cluster -- see clouds/<cloud>/platform-config.yaml).
+    #    kro READS this ConfigMap and never creates/owns it. It is how KRO --
+    #    not the Kubernetes default-StorageClass mechanism -- resolves the
+    #    per-cluster storage choice: the SAME RGD and the SAME instance apply on
+    #    every cloud, and this object supplies the environment-specific value.
+    #    The ConfigMap must exist before a GenAIService reconciles (setup.sh and
+    #    setup-multicloud.sh apply it); an empty storageClass value means
+    #    "inherit the cluster default."
+    - id: platformConfig
+      externalRef:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: genaiops-platform-config
+
     # 1) Model cache: a PVC so model weights survive pod restarts.
-    #    storageClassName is portability-critical and must be handled carefully:
-    #      - omitted  -> inherit the cluster's DEFAULT StorageClass (what we want
-    #                    on kind / any cloud when the developer didn't override).
-    #      - "" (set) -> Kubernetes DISABLES dynamic provisioning; the PVC never
-    #                    binds. So we must not emit the field at all by default.
+    #    The effective StorageClass is resolved by KRO with this precedence:
+    #      1. the developer's instance override (schema.spec.storageClass), else
+    #      2. the platform team's per-cluster value (platformConfig.data.storageClass), else
+    #      3. "" -> inherit the cluster's DEFAULT StorageClass.
+    #    storageClassName must be handled carefully at the bottom of that chain:
+    #      - omitted  -> inherit the cluster's DEFAULT StorageClass.
+    #      - "" (set) -> Kubernetes DISABLES dynamic provisioning; PVC never binds.
     #    kro has no GA way to drop a single field, so we split the PVC into two
     #    mutually-exclusive includeWhen variants that share one name. Exactly one
     #    is ever created, and the Deployment mounts that name unconditionally.
     #
-    #    1a) Default: no storageClassName -> cluster default StorageClass.
+    #    1a) Neither override nor platform value set -> omit storageClassName ->
+    #        cluster default StorageClass.
     - id: cache
       includeWhen:
-        - ${schema.spec.storageClass == ""}
+        - ${schema.spec.storageClass == "" && platformConfig.data.storageClass == ""}
       template:
         apiVersion: v1
         kind: PersistentVolumeClaim
@@ -78,12 +99,13 @@ spec:
             requests:
               storage: '${schema.spec.cacheSize}'
 
-    #    1b) Override: the developer picked a StorageClass (gp3 on EKS,
-    #        premium-rwo on GKE, managed-csi on AKS). Same name as 1a -- this is
-    #        the whole portability story: a field, not a manifest rewrite.
+    #    1b) Override OR platform value present -> KRO folds the resolved class in
+    #        (gp3 on EKS, premium-rwo on GKE, managed-csi on AKS). Same name as
+    #        1a -- this is the whole portability story: a value KRO resolves
+    #        per-cluster, not a manifest rewrite and not a developer concern.
     - id: cacheOverride
       includeWhen:
-        - ${schema.spec.storageClass != ""}
+        - ${schema.spec.storageClass != "" || platformConfig.data.storageClass != ""}
       template:
         apiVersion: v1
         kind: PersistentVolumeClaim
@@ -91,7 +113,7 @@ spec:
           name: ${schema.spec.name}-cache
         spec:
           accessModes: ["ReadWriteOnce"]
-          storageClassName: '${schema.spec.storageClass}'
+          storageClassName: '${schema.spec.storageClass != "" ? schema.spec.storageClass : platformConfig.data.storageClass}'
           resources:
             requests:
               storage: '${schema.spec.cacheSize}'
