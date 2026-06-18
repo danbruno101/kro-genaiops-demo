@@ -46,6 +46,11 @@ say "Deploying Prometheus (lightweight, for the monitoring beat)"
 kubectl apply -f "$(dirname "$0")/../monitoring/prometheus.yaml"
 kubectl wait --for=condition=Available deploy/prometheus --timeout=120s || true
 
+say "Applying platform config (platform team owns this; KRO reads it per-cluster)"
+# The RGD reads genaiops-platform-config via externalRef to resolve the
+# per-cluster StorageClass. On a laptop kind cluster it's empty = cluster default.
+kubectl apply -f "$(dirname "$0")/../clouds/kind/platform-config.yaml"
+
 say "Applying the GenAIOps ResourceGraphDefinition (platform team artifact)"
 kubectl apply -f "$(dirname "$0")/../rgd/genaiops-rgd.yaml"
 
