@@ -190,10 +190,20 @@ def main():
     log(f"  evaluation: eval_accuracy={eval_accuracy}")
 
     if wait_for_mlflow():
-        try:
-            register_to_mlflow(loss, eval_accuracy)
-        except Exception as e:  # noqa: BLE001 - never fail the run on registry hiccup
-            log(f"WARN: MLflow registration failed: {e}")
+        # Registration stays best-effort (a registry hiccup must never fail the
+        # training run), but retry transient failures: CI asserts the model is
+        # registered, so a single dropped POST shouldn't silently lose it.
+        registered = False
+        for attempt in range(1, 6):
+            try:
+                register_to_mlflow(loss, eval_accuracy)
+                registered = True
+                break
+            except Exception as e:  # noqa: BLE001 - never fail the run on registry hiccup
+                log(f"WARN: MLflow registration attempt {attempt}/5 failed: {e}")
+                time.sleep(3)
+        if not registered:
+            log("WARN: MLflow registration did not succeed after retries.")
     else:
         log("WARN: MLflow not reachable; skipping registration.")
 
