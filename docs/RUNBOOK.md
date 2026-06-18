@@ -6,6 +6,11 @@ KRO is the portability layer; the LLM is just proof the layer holds.*
 Total live time: ~8–10 min. Everything below is copy-paste. Keep two terminals
 open (LEFT = you type, RIGHT = `watch`), plus a browser tab on Prometheus.
 
+> **Two run modes.** Beats 0–5 are **use-case 1** (serving) — the KubeCon talk,
+> run after `./scripts/setup.sh`. Beats 6–9 are **use-case 2** (fine-tuning) —
+> the Maintainer Summit, run after also doing `./scripts/setup-finetune.sh`.
+> Skip 6–9 for the simple KubeCon session.
+
 ---
 
 ## T-minus (before you walk on)
@@ -122,6 +127,79 @@ kubectl get deploy,svc,pvc -l app=sentiment-api   # all gone
 
 ---
 
+## ── Use-case 2: fine-tuning (Maintainer Summit only) ──
+
+Prereq: `./scripts/setup-finetune.sh` has run (adds MLflow + the fine-tuning
+API + the trainer/drift images). Pre-warm a second browser tab on MLflow:
+```bash
+kubectl port-forward svc/mlflow 5000:5000     # RIGHT terminal #2
+```
+Browser tab: http://localhost:5000 (Models + Experiments).
+
+## Beat 6 — One YAML, the whole MLOps lifecycle (2 min)
+Show `rgd/finetune-rgd.yaml` briefly — point at the schema, then at the serving
+`replicas: '${schema.spec.approved ? servingReplicas : 0}'` line:
+> "Same kro pattern as before — but this one template provisions a training job,
+> MLflow registration, an approval gate, serving, AND drift detection."
+
+LEFT terminal — start with the **manual** gate (the guardrail):
+```bash
+cat instances/fraud-finetune.yaml          # ~10 lines, approvalPolicy: manual
+kubectl apply -f instances/fraud-finetune.yaml
+```
+RIGHT terminal:
+```bash
+watch -n1 'kubectl get finetunemodel,job,deploy,pvc -l app=fraud-tuned'
+```
+> "The Job trains and evaluates, the model lands in MLflow — but serving is at
+> **0 replicas**. Nothing goes live without sign-off."
+
+## Beat 7 — Human-in-the-loop approval (1.5 min) ← the compliance story
+Flip to the MLflow tab → the `fraud-tuned` run → show `eval_accuracy`.
+> "A data scientist reviews the metrics here. Promotion to production is an
+> explicit, auditable change — not a side effect of training."
+
+Approve it:
+```bash
+kubectl patch finetunemodel fraud-tuned --type merge -p '{"spec":{"approved":true}}'
+```
+Watch serving scale 0 → 1 in the RIGHT terminal.
+> "One field. kro reconciled the gate and scaled serving up."
+
+## Beat 8 — Auto-promotion on eval pass (1.5 min)
+```bash
+cat instances/sentiment-finetune.yaml      # approvalPolicy: auto
+kubectl apply -f instances/sentiment-finetune.yaml
+kubectl get finetunemodel sentiment-tuned -w
+```
+> "This team trusts the eval gate. The Job evaluates, clears the threshold, and
+> promotes itself — serving comes up with no human in the loop. Below the
+> threshold, it would stay dark."
+
+Drift + observability — flip to the Prometheus tab → Graph:
+```
+genaiops_drift_score
+```
+> "The drift detector the template added is already being scraped. No Prometheus
+> config — same annotations as everything else."
+
+## Beat 9 — Portability + independence (1.5 min) ← the thesis
+```bash
+kubectl apply -f instances/finetune-catalog.yaml
+kubectl get finetunemodel
+```
+> "Same template, five teams, four clouds — only `trainMode`/`servingMode` and
+> `storageClass` differ. And this entire use-case is independent: it's a separate
+> RGD. Deleting it leaves the serving use-case untouched —"
+```bash
+kubectl delete -f rgd/finetune-rgd.yaml    # finetune gone; GenAIService intact
+kubectl get genaiservice                    # use-case 1 still running
+```
+> "That's how a real platform onboards teams: each use-case is just another RGD.
+> No vendor lock-in, no shared blast radius."
+
+---
+
 ## If something breaks on stage
 - **CRD not registered yet:** `kubectl get rgd` — wait for `ACTIVE`. The setup
   script already waits, but if you re-applied, give it ~10s.
@@ -129,5 +207,10 @@ kubectl get deploy,svc,pvc -l app=sentiment-api   # all gone
   `kind load docker-image genaiops/mock-vllm:demo --name genaiops-demo`
 - **Prometheus target missing:** the pod needs `monitoring: true` (default) and
   ~10s to be scraped. Check `kubectl get svc -l genaiops.kro.run/scrape=true`.
+- **Fine-tuning: serving stuck at 0:** that's the gate working. In manual mode
+  patch `approved: true`; in auto mode check the Job logs
+  (`kubectl logs job/<name>-train`) for the eval score vs threshold.
+- **Fine-tuning: model not in MLflow:** the Job waits for MLflow to be ready.
+  Confirm `kubectl get deploy mlflow` is Available, then re-check the Job logs.
 - **Total fallback:** screenshots in `docs/` + this runbook are enough to narrate
   the whole flow without a live cluster.

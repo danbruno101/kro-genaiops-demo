@@ -7,6 +7,10 @@ node_modules/
 kubeconfig
 *.log
 
+# Python
+__pycache__/
+*.pyc
+
 # OS noise
 .DS_Store
 Thumbs.db

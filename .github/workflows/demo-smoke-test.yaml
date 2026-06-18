@@ -143,3 +143,167 @@ jobs:
           kubectl describe rgd genaiservice.kro.run || true
           kubectl get genaiservice -o yaml || true
           kubectl logs -n kro deploy/kro --tail=100 || true
+
+  # ===========================================================================
+  # Second use-case: fine-tuning. A SEPARATE job on its own cluster so use-case 2
+  # is proven independently of use-case 1 -- the serving `smoke` job above is left
+  # entirely untouched. A future use-case 3 adds its own job the same way.
+  # ===========================================================================
+  finetune-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLUSTER: genaiops-ci-ft
+      KRO_VERSION: "0.9.1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: genaiops-ci-ft
+          wait: 60s
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Resolve kro version
+        run: |
+          if [ -z "${KRO_VERSION}" ]; then
+            echo "No pin set; resolving latest kro release..."
+            KRO_VERSION="$(curl -sL https://api.github.com/repos/kubernetes-sigs/kro/releases/latest \
+              | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
+            echo "KRO_VERSION=${KRO_VERSION}" >> "$GITHUB_ENV"
+          fi
+          echo "Using kro version: ${KRO_VERSION}"
+
+      - name: Install kro (official chart)
+        run: |
+          helm install kro oci://registry.k8s.io/kro/charts/kro \
+            --namespace kro --create-namespace \
+            ${KRO_VERSION:+--version "${KRO_VERSION}"} \
+            --wait --timeout 5m
+          kubectl wait --for=condition=Available deploy -n kro --all --timeout=180s
+
+      - name: Build and load images (mock-vllm for serving + trainer + drift)
+        run: |
+          docker build -t genaiops/mock-vllm:demo monitoring/mock-vllm
+          docker build -t genaiops/mock-trainer:demo monitoring/mock-trainer
+          docker build -t genaiops/mock-drift:demo monitoring/mock-drift
+          kind load docker-image genaiops/mock-vllm:demo --name "${CLUSTER}"
+          kind load docker-image genaiops/mock-trainer:demo --name "${CLUSTER}"
+          kind load docker-image genaiops/mock-drift:demo --name "${CLUSTER}"
+
+      - name: Deploy MLflow (shared platform infra)
+        run: |
+          kubectl apply -f monitoring/mlflow.yaml
+          kubectl wait --for=condition=Available deploy/mlflow --timeout=240s
+
+      - name: Apply the Fine-Tuning ResourceGraphDefinition
+        run: |
+          kubectl apply -f rgd/finetune-rgd.yaml
+          kubectl get rgd
+
+      - name: Wait for the generated FineTuneModel CRD to register
+        run: |
+          for i in $(seq 1 30); do
+            if kubectl get crd finetunemodels.kro.run >/dev/null 2>&1; then
+              echo "FineTuneModel API is live."; exit 0
+            fi
+            echo "waiting for CRD... ($i)"; sleep 4
+          done
+          echo "::error::FineTuneModel CRD never registered"
+          kubectl describe rgd finetunemodel.kro.run || true
+          exit 1
+
+      - name: Auto path — train, register, self-approve, serve
+        run: |
+          set -e
+          kubectl apply -f instances/sentiment-finetune.yaml
+
+          echo "Waiting for kro to create the training Job..."
+          for i in $(seq 1 45); do
+            if kubectl get job sentiment-tuned-train >/dev/null 2>&1; then
+              echo "Job exists."; break
+            fi
+            echo "waiting for Job... ($i)"; sleep 4
+          done
+
+          echo "Waiting for the training Job to complete..."
+          kubectl wait --for=condition=complete job/sentiment-tuned-train --timeout=240s
+
+          echo "Asserting the model was registered in MLflow..."
+          kubectl port-forward svc/mlflow 5000:5000 &
+          PF=$!; sleep 5
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            'localhost:5000/api/2.0/mlflow/registered-models/get?name=sentiment-tuned')"
+          kill $PF || true
+          test "${code}" = "200"
+          echo "OK: MLflow has registered model 'sentiment-tuned' (HTTP ${code})."
+
+          echo "Asserting auto-approval scaled serving up (replicas: 2)..."
+          kubectl wait --for=condition=Available deploy/sentiment-tuned --timeout=240s
+          ready="$(kubectl get deploy sentiment-tuned -o jsonpath='{.status.readyReplicas}')"
+          test "${ready}" = "2"
+          echo "OK: ${ready}/2 replicas ready after auto-approval."
+
+          echo "Asserting child resources exist..."
+          kubectl get pvc sentiment-tuned-artifacts
+          kubectl get svc sentiment-tuned
+          kubectl get deploy sentiment-tuned-drift
+
+      - name: Manual gate — serving stays at 0 until a human approves
+        run: |
+          set -e
+          kubectl apply -f instances/fraud-finetune.yaml
+
+          echo "Waiting for the training Job to complete..."
+          for i in $(seq 1 45); do
+            if kubectl get job fraud-tuned-train >/dev/null 2>&1; then break; fi
+            echo "waiting for Job... ($i)"; sleep 4
+          done
+          kubectl wait --for=condition=complete job/fraud-tuned-train --timeout=240s
+
+          echo "Asserting the serving Deployment is gated at 0 replicas..."
+          for i in $(seq 1 30); do
+            if kubectl get deploy fraud-tuned >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          desired="$(kubectl get deploy fraud-tuned -o jsonpath='{.spec.replicas}')"
+          test "${desired}" = "0"
+          echo "OK: gate holds, fraud-tuned serving desired replicas = ${desired}."
+
+          echo "Data scientist approves -> serving should scale up..."
+          kubectl patch finetunemodel fraud-tuned --type merge \
+            -p '{"spec":{"approved":true}}'
+          kubectl wait --for=condition=Available deploy/fraud-tuned --timeout=240s
+          echo "OK: manual approval scaled fraud-tuned serving up."
+
+      - name: Portability — catalog applies cleanly across cloud profiles
+        run: |
+          set -e
+          kubectl apply -f instances/finetune-catalog.yaml
+          kubectl get finetunemodel
+          echo "Waiting for batch-classifier-tuned training Job..."
+          for i in $(seq 1 45); do
+            if kubectl get job batch-classifier-tuned-train >/dev/null 2>&1; then break; fi
+            sleep 4
+          done
+          # batch-classifier-tuned has driftDetection:false -> no drift Deployment
+          if kubectl get deploy batch-classifier-tuned-drift >/dev/null 2>&1; then
+            echo "::error::includeWhen failed: drift deploy exists despite driftDetection:false"
+            exit 1
+          fi
+          echo "OK: includeWhen toggle respected across the finetune catalog."
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all -A || true
+          kubectl describe rgd finetunemodel.kro.run || true
+          kubectl get finetunemodel -o yaml || true
+          kubectl get jobs -o wide || true
+          kubectl logs -l genaiops.kro.run/finetune --tail=100 --prefix || true
+          kubectl logs deploy/mlflow --tail=50 || true
+          kubectl logs -n kro deploy/kro --tail=100 || true

@@ -1,0 +1,83 @@
+# =============================================================================
+# Portability proof for the fine-tuning use-case. Five teams, five
+# FineTuneModels, ONE template. The YAML *shape* is identical everywhere -- only
+# the values of trainMode / servingMode and storageClass change per cloud. No
+# re-templating, no Helm overlays, no per-cloud CRD variants, no vendor SDK.
+#
+# And the control plane is constant across all of them: every team registers to
+# the same MLflow (http://mlflow:5000) and is scraped by the same Prometheus,
+# regardless of which cloud the training/serving infra lands on. That constant
+# control plane + field-driven data plane is the whole portability story.
+#
+# (For a live demo on kind these all run in mock mode; the commented values show
+#  what flips on each cloud's GPU + storage profile.)
+# =============================================================================
+---
+# Team A: kind cluster (CPU-only, mock end to end)
+apiVersion: kro.run/v1alpha1
+kind: FineTuneModel
+metadata:
+  name: summarizer-tuned
+spec:
+  name: summarizer-tuned
+  dataset: "release-notes-v1"
+  trainMode: mock
+  servingMode: mock
+  approvalPolicy: auto
+  servingReplicas: 1
+---
+# Team B: EKS profile (GPU training + gp3)
+apiVersion: kro.run/v1alpha1
+kind: FineTuneModel
+metadata:
+  name: code-assistant-tuned
+spec:
+  name: code-assistant-tuned
+  dataset: "internal-monorepo-v4"
+  trainMode: mock            # flip to "gpu" on an EKS GPU node
+  servingMode: mock          # flip to "gpu" on EKS
+  storageClass: ""           # becomes "gp3" on EKS
+  approvalPolicy: manual
+  servingReplicas: 2
+---
+# Team C: GKE profile (GPU training + premium-rwo)
+apiVersion: kro.run/v1alpha1
+kind: FineTuneModel
+metadata:
+  name: doc-search-tuned
+spec:
+  name: doc-search-tuned
+  dataset: "kb-articles-v9"
+  trainMode: mock            # "gpu" on a GKE GPU node pool
+  servingMode: mock
+  storageClass: ""           # "premium-rwo" on GKE
+  approvalPolicy: auto
+  servingReplicas: 1
+---
+# Team D: AKS profile (GPU training + managed-csi)
+apiVersion: kro.run/v1alpha1
+kind: FineTuneModel
+metadata:
+  name: ticket-router-tuned
+spec:
+  name: ticket-router-tuned
+  dataset: "support-tickets-v3"
+  trainMode: mock            # "gpu" on an AKS GPU node pool
+  servingMode: mock
+  storageClass: ""           # "managed-csi" on AKS
+  approvalPolicy: manual
+  servingReplicas: 1
+---
+# Team E: drift detection disabled (includeWhen toggle -> no *-drift Deployment)
+apiVersion: kro.run/v1alpha1
+kind: FineTuneModel
+metadata:
+  name: batch-classifier-tuned
+spec:
+  name: batch-classifier-tuned
+  dataset: "archive-corpus-v1"
+  trainMode: mock
+  servingMode: mock
+  approvalPolicy: auto
+  driftDetection: false      # includeWhen toggle: no drift Deployment created
+  servingReplicas: 1
