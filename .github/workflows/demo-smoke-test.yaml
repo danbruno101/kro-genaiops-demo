@@ -87,7 +87,20 @@ jobs:
       - name: Assert kro reconciled the child resources
         run: |
           set -e
-          echo "Waiting for the Deployment kro should have created..."
+          # kro reconciliation is asynchronous, and the GenAIService CRD's
+          # dynamic controller has only just started (we applied the RGD moments
+          # ago). 'kubectl wait' errors immediately on a not-yet-created object,
+          # so first poll until kro has created the Deployment, then wait for it
+          # to become Available.
+          echo "Waiting for kro to create the Deployment..."
+          for i in $(seq 1 45); do
+            if kubectl get deploy sentiment-api >/dev/null 2>&1; then
+              echo "Deployment exists."; break
+            fi
+            echo "waiting for Deployment... ($i)"; sleep 4
+          done
+
+          echo "Waiting for the Deployment to become Available..."
           kubectl wait --for=condition=Available deploy/sentiment-api \
             --timeout=180s
 
