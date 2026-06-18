@@ -1,0 +1,12 @@
+# Build / render artifacts
+*.pdf
+slide-*.jpg
+node_modules/
+
+# kind / kube scratch
+kubeconfig
+*.log
+
+# OS noise
+.DS_Store
+Thumbs.db
