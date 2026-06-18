@@ -9,7 +9,7 @@ footer: "KubeCon NA · Maintainers Summit"
 
 <!--
 Maintainers Summit deck (the "second deck"). Standalone superset of the
-KubeCon main-session deck (genaiops-kro-deck.pptx): it keeps the serving story
+KubeCon main-session deck (docs/kubecon-deck.md): it keeps the serving story
 (use-case 1) and adds the fine-tuning lifecycle (use-case 2).
 
 Render locally:

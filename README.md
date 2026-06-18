@@ -65,11 +65,13 @@ note at the bottom.
 | `monitoring/` | Lightweight Prometheus, MLflow, and the mock-vllm / mock-trainer / mock-drift image sources. |
 | `scripts/setup.sh` / `teardown.sh` | One-command cluster up/down for use-case 1 (kind). |
 | `scripts/setup-finetune.sh` / `teardown-finetune.sh` | Layered up/down for use-case 2 (additive, independent). |
-| `scripts/setup-multicloud.sh` / `teardown-multicloud.sh` | **The portability thesis, live.** Stands up two kind clusters that stand in for two clouds (GKE / AKS) and moves the same workload between them. |
+| `scripts/setup-multicloud.sh` / `teardown-multicloud.sh` | **The portability thesis, live (local).** Stands up two kind clusters that stand in for two clouds (GKE / AKS) and moves the same workload between them. |
+| `scripts/deploy-to-cluster.sh` / `deploy-multicloud-real.sh` | **The portability thesis, live (real clouds).** Deploys the same RGD + ConfigMap onto already-provisioned GKE / AKS clusters (kro + RGD + one ConfigMap — nothing cloud-specific created). |
 | `clouds/` | **Platform-team environment config.** The only place cloud details live — a per-cluster `genaiops-platform-config` ConfigMap KRO reads (via `externalRef`) to resolve the StorageClass, plus that StorageClass. Never the RGD, never an instance. See `clouds/README.md`. |
 | `docs/MULTICLOUD.md` | **Minute-by-minute multi-cloud runbook.** Deploy one spec to "GKE", move it to "AKS", no diff. |
+| `docs/PROVISION-REAL-CLUSTERS.md` | **Morning-of runbook** to provision real GKE + AKS clusters and deploy the platform to both for the live demo. |
 | `docs/RUNBOOK.md` | **Minute-by-minute stage script.** Read this before presenting. |
-| `genaiops-kro-deck.pptx` | KubeCon talk deck (use-case 1): impact slide + two-panel architecture diagram (kind / EKS / GKE / AKS). |
+| `docs/kubecon-deck.md` | KubeCon main-session deck (use-case 1), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/kubecon-deck.md -o deck.pptx`. |
 | `docs/maintainers-summit-deck.md` | Maintainers Summit deck (both use-cases), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/maintainers-summit-deck.md -o deck.pptx`. |
 
 ## The contrast, in numbers
@@ -176,9 +178,26 @@ point:
 The cloud-specific detail is isolated to `clouds/` (platform-team owned) — it
 never leaks into the RGD or any instance. Follow `docs/MULTICLOUD.md` for the
 staged walkthrough, and `clouds/README.md` for how to add a third cloud (EKS is
-included as a worked example). To run against *real* GKE/AKS clusters, swap the
-StorageClass provisioner for the cloud's CSI driver and point the same RGD and
-instance at that kubeconfig context.
+included as a worked example).
+
+### On real GKE / AKS (the live demo)
+
+kind covers CI and local dev; the live demo deploys the **same** RGD and
+instances to **real, already-provisioned GKE and AKS clusters**:
+
+```bash
+# clusters already provisioned; contexts named gke / aks
+./scripts/deploy-multicloud-real.sh
+kubectl --context gke apply -f instances/sentiment-api.yaml   # binds premium-rwo
+kubectl --context aks apply -f instances/sentiment-api.yaml   # binds managed-csi
+```
+
+Nothing cloud-specific is installed — just kro, the RGD, and the
+`genaiops-platform-config` ConfigMap KRO reads (GKE/AKS already ship the named
+StorageClass). The mock workload image is pulled from GHCR
+(`ghcr.io/danbruno101/mock-vllm:demo`), so no `kind load` is involved.
+`docs/PROVISION-REAL-CLUSTERS.md` is the morning-of runbook for standing the
+clusters up.
 
 ## How portability actually works here
 
@@ -204,3 +223,9 @@ them.
 - `mock-vllm` is stdlib-only Python; it serves `/health`, `/metrics`, and
   `/v1/chat/completions` so the demo runs GPU-free. In `gpu` mode the RGD swaps
   in `vllm/vllm-openai` with no other changes.
+- **Images:** the mock images are published to GHCR
+  (`ghcr.io/danbruno101/{mock-vllm,mock-trainer,mock-drift}:demo`) by
+  `.github/workflows/publish-images.yaml` so real clusters can pull them. kind
+  (CI + local) builds them locally and `kind load`s the same tag, so CI never
+  depends on GHCR. The `:demo` tag keeps `imagePullPolicy: IfNotPresent`, so kind
+  uses the loaded image and managed clusters pull from GHCR.

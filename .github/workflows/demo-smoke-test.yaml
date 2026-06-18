@@ -59,8 +59,8 @@ jobs:
 
       - name: Build and load mock-vllm image
         run: |
-          docker build -t genaiops/mock-vllm:demo monitoring/mock-vllm
-          kind load docker-image genaiops/mock-vllm:demo --name "${CLUSTER}"
+          docker build -t ghcr.io/danbruno101/mock-vllm:demo monitoring/mock-vllm
+          kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name "${CLUSTER}"
 
       - name: Apply the ResourceGraphDefinition
         run: |
@@ -206,12 +206,12 @@ jobs:
 
       - name: Build and load images (mock-vllm for serving + trainer + drift)
         run: |
-          docker build -t genaiops/mock-vllm:demo monitoring/mock-vllm
-          docker build -t genaiops/mock-trainer:demo monitoring/mock-trainer
-          docker build -t genaiops/mock-drift:demo monitoring/mock-drift
-          kind load docker-image genaiops/mock-vllm:demo --name "${CLUSTER}"
-          kind load docker-image genaiops/mock-trainer:demo --name "${CLUSTER}"
-          kind load docker-image genaiops/mock-drift:demo --name "${CLUSTER}"
+          docker build -t ghcr.io/danbruno101/mock-vllm:demo monitoring/mock-vllm
+          docker build -t ghcr.io/danbruno101/mock-trainer:demo monitoring/mock-trainer
+          docker build -t ghcr.io/danbruno101/mock-drift:demo monitoring/mock-drift
+          kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name "${CLUSTER}"
+          kind load docker-image ghcr.io/danbruno101/mock-trainer:demo --name "${CLUSTER}"
+          kind load docker-image ghcr.io/danbruno101/mock-drift:demo --name "${CLUSTER}"
 
       - name: Deploy MLflow (shared platform infra)
         run: |
@@ -373,8 +373,8 @@ jobs:
 
       - name: Build and load mock-vllm image
         run: |
-          docker build -t genaiops/mock-vllm:demo monitoring/mock-vllm
-          kind load docker-image genaiops/mock-vllm:demo --name "${CLUSTER}"
+          docker build -t ghcr.io/danbruno101/mock-vllm:demo monitoring/mock-vllm
+          kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name "${CLUSTER}"
 
       - name: Apply the RGD and a platform config naming a StorageClass
         run: |

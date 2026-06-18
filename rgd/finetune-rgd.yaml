@@ -182,7 +182,7 @@ spec:
               restartPolicy: Never
               containers:
                 - name: trainer
-                  image: genaiops/mock-trainer:demo
+                  image: ghcr.io/danbruno101/mock-trainer:demo
                   env:
                     - name: MODEL_NAME
                       value: '${schema.spec.baseModel}'
@@ -253,7 +253,7 @@ spec:
                 - name: server
                   # mock mode: the same OpenAI-compatible stub as GenAIService.
                   # gpu mode: swap to vLLM, loading the fine-tuned weights.
-                  image: '${schema.spec.servingMode == "gpu" ? "vllm/vllm-openai:latest" : "genaiops/mock-vllm:demo"}'
+                  image: '${schema.spec.servingMode == "gpu" ? "vllm/vllm-openai:latest" : "ghcr.io/danbruno101/mock-vllm:demo"}'
                   args: '${schema.spec.servingMode == "gpu" ? ["--model", schema.spec.baseModel] : ["--model", schema.spec.baseModel, "--mock"]}'
                   ports:
                     - name: http
@@ -362,7 +362,7 @@ spec:
             spec:
               containers:
                 - name: drift
-                  image: genaiops/mock-drift:demo
+                  image: ghcr.io/danbruno101/mock-drift:demo
                   ports:
                     - name: http
                       containerPort: 8000
