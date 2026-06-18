@@ -41,10 +41,32 @@ spec:
       conditions: '${deployment.status.conditions}'
 
   # --- The resources the single API expands into -----------------------------
-  # kro infers the DAG from the CEL references between these. No manual ordering.
+  # kro builds the resource graph from these definitions and writes the
+  # GenAIService status back from the live Service/Deployment (see schema.status).
+  #
+  # Note on the cache PVC: it is deliberately NOT referenced by the Deployment via
+  # CEL. Doing so would make kro gate Deployment creation on the PVC becoming
+  # *ready* (Bound). But the common default StorageClass (kind's local-path, and
+  # most clouds) uses volumeBindingMode: WaitForFirstConsumer, so the PVC cannot
+  # bind until a consumer Pod exists -- which never happens if the Deployment is
+  # blocked on the PVC. The Deployment instead mounts the cache by its well-known
+  # name (${schema.spec.name}-cache); kro creates both concurrently, the Pod gets
+  # scheduled, and that triggers the PVC to bind. No manual ordering, no deadlock.
   resources:
     # 1) Model cache: a PVC so model weights survive pod restarts.
+    #    storageClassName is portability-critical and must be handled carefully:
+    #      - omitted  -> inherit the cluster's DEFAULT StorageClass (what we want
+    #                    on kind / any cloud when the developer didn't override).
+    #      - "" (set) -> Kubernetes DISABLES dynamic provisioning; the PVC never
+    #                    binds. So we must not emit the field at all by default.
+    #    kro has no GA way to drop a single field, so we split the PVC into two
+    #    mutually-exclusive includeWhen variants that share one name. Exactly one
+    #    is ever created, and the Deployment mounts that name unconditionally.
+    #
+    #    1a) Default: no storageClassName -> cluster default StorageClass.
     - id: cache
+      includeWhen:
+        - ${schema.spec.storageClass == ""}
       template:
         apiVersion: v1
         kind: PersistentVolumeClaim
@@ -52,10 +74,24 @@ spec:
           name: ${schema.spec.name}-cache
         spec:
           accessModes: ["ReadWriteOnce"]
-          # CEL conditional: only set storageClassName when the user provided one,
-          # otherwise omit it and inherit the cluster default. This is the line
-          # that makes the same RGD portable across clouds with different SCs.
-          storageClassName: '${schema.spec.storageClass != "" ? schema.spec.storageClass : ""}'
+          resources:
+            requests:
+              storage: '${schema.spec.cacheSize}'
+
+    #    1b) Override: the developer picked a StorageClass (gp3 on EKS,
+    #        premium-rwo on GKE, managed-csi on AKS). Same name as 1a -- this is
+    #        the whole portability story: a field, not a manifest rewrite.
+    - id: cacheOverride
+      includeWhen:
+        - ${schema.spec.storageClass != ""}
+      template:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: ${schema.spec.name}-cache
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          storageClassName: '${schema.spec.storageClass}'
           resources:
             requests:
               storage: '${schema.spec.cacheSize}'
@@ -118,7 +154,11 @@ spec:
               volumes:
                 - name: cache
                   persistentVolumeClaim:
-                    claimName: '${cache.metadata.name}'
+                    # Mount by well-known name, NOT via '${cache.metadata.name}'.
+                    # A CEL ref would make kro wait for the PVC to be Bound before
+                    # creating this Deployment -- a deadlock under the default
+                    # WaitForFirstConsumer StorageClass (see the cache PVC above).
+                    claimName: '${schema.spec.name}-cache'
 
     # 3) Service: stable in-cluster endpoint for the model.
     - id: service
