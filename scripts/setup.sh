@@ -39,8 +39,8 @@ kubectl wait --for=condition=Available deploy -n kro --all --timeout=120s || tru
 
 say "Building and loading the mock-vllm image into kind"
 MOCK_DIR="$(dirname "$0")/../monitoring/mock-vllm"
-docker build -t genaiops/mock-vllm:demo "${MOCK_DIR}"
-kind load docker-image genaiops/mock-vllm:demo --name "${CLUSTER}"
+docker build -t ghcr.io/danbruno101/mock-vllm:demo "${MOCK_DIR}"
+kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name "${CLUSTER}"
 
 say "Deploying Prometheus (lightweight, for the monitoring beat)"
 kubectl apply -f "$(dirname "$0")/../monitoring/prometheus.yaml"

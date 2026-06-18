@@ -67,7 +67,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: trainer
-          image: genaiops/mock-trainer:demo
+          image: ghcr.io/danbruno101/mock-trainer:demo
           env:
             - name: MODEL_NAME
               value: "Qwen/Qwen2.5-0.5B-Instruct"
@@ -121,7 +121,7 @@ spec:
     spec:
       containers:
         - name: server
-          image: genaiops/mock-vllm:demo
+          image: ghcr.io/danbruno101/mock-vllm:demo
           args: ["--model", "Qwen/Qwen2.5-0.5B-Instruct", "--mock"]
           ports:
             - name: http
@@ -209,7 +209,7 @@ spec:
     spec:
       containers:
         - name: drift
-          image: genaiops/mock-drift:demo
+          image: ghcr.io/danbruno101/mock-drift:demo
           ports:
             - name: http
               containerPort: 8000
