@@ -41,6 +41,13 @@ spec:
             - "0.0.0.0"
             - "--port"
             - "5000"
+            # Recent MLflow versions ship a security middleware that rejects any
+            # request whose Host header isn't in an allowlist (default:
+            # localhost-only). In-cluster clients reach us as "mlflow:5000", so
+            # that host must be allowed or every API call 403s. (/health is
+            # exempt, so the readiness probe is unaffected.)
+            - "--allowed-hosts"
+            - "mlflow:5000,mlflow,localhost:5000,localhost,127.0.0.1:5000,127.0.0.1"
           ports:
             - containerPort: 5000
           readinessProbe:
