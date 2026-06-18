@@ -6,15 +6,17 @@ just works — same RGD, same instance, zero diff.*
 
 This walkthrough simulates **two clouds with two local `kind` clusters**:
 
-| Context | Plays the role of | Default StorageClass (platform-owned) |
-|---------|-------------------|----------------------------------------|
+| Context | Plays the role of | StorageClass KRO resolves (from `clouds/<cloud>/`) |
+|---------|-------------------|----------------------------------------------------|
 | `kind-genaiops-gke` | GKE | `premium-rwo` |
 | `kind-genaiops-aks` | AKS | `managed-csi` |
 
 The *only* thing that makes one cluster "GKE" and the other "AKS" is the
-platform-team config in `clouds/<cloud>/` — chiefly each cluster's default
-StorageClass. The `ResourceGraphDefinition` is byte-identical on both. The
-product instance is byte-identical on both.
+platform-team config in `clouds/<cloud>/`: a StorageClass plus a
+`genaiops-platform-config` ConfigMap. The RGD reads that ConfigMap (a read-only
+`externalRef`) and folds its `storageClass` into each workload's PVC — so **KRO**
+does the per-cluster resolution. The `ResourceGraphDefinition` is byte-identical
+on both clusters. The product instance is byte-identical on both.
 
 > Everything runs GPU-free on a laptop. On real GKE/AKS clusters the only change
 > is the StorageClass provisioner (CSI driver); see `clouds/README.md`.
@@ -43,14 +45,16 @@ kubectl --context kind-genaiops-gke get nodes -L topology.kubernetes.io/region,d
 kubectl --context kind-genaiops-aks get nodes -L topology.kubernetes.io/region,demo.genaiops/cloud
 ```
 
-Now show the one platform-owned difference that matters — the default storage:
+Now show the one platform-owned difference that matters — the storage choice
+KRO will read for each cluster:
 ```bash
-kubectl --context kind-genaiops-gke get sc     # premium-rwo  (default)
-kubectl --context kind-genaiops-aks get sc     # managed-csi  (default)
+kubectl --context kind-genaiops-gke get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}{"\n"}'   # premium-rwo
+kubectl --context kind-genaiops-aks get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}{"\n"}'   # managed-csi
 ```
-> "Two clouds. Each has its own default storage class, named exactly what that
-> cloud calls it. The platform team set that — it lives in `clouds/`, not in any
-> template a developer touches."
+> "Two clouds. Each names its own storage class — exactly what that cloud calls
+> it — in a ConfigMap the platform team owns. It lives in `clouds/`, not in any
+> template a developer touches. The RGD *reads* this; that's how KRO resolves the
+> environment per cluster."
 
 And the platform contract is the *same* on both:
 ```bash
@@ -78,8 +82,8 @@ Prove the PVC bound to **GKE's** storage — which the product team never named:
 kubectl --context kind-genaiops-gke get pvc sentiment-api-cache \
   -o jsonpath='{.spec.storageClassName}{"\n"}'      # -> premium-rwo
 ```
-> "The instance left storage unspecified, so it inherited the cluster default.
-> On this cloud that's `premium-rwo`. The developer never knew."
+> "The instance left storage unspecified, so KRO resolved it from this cluster's
+> platform ConfigMap. On this cloud that's `premium-rwo`. The developer never knew."
 
 ---
 
@@ -142,11 +146,13 @@ or ship a Helm chart."* Here's why that's not the same thing — say all three:
 > environment branching lives — so moving it is just submitting the same intent
 > to a cluster that speaks the same API, and the cluster fills in its own truth."
 
-**Stay honest:** in *this* demo the storageClass value is filled in by Kubernetes'
-default-StorageClass mechanism, not KRO. KRO's job is making everything else — the
-graph, the ordering, the mock↔gpu / storageClass branching, the single-owner
-lifecycle, and the reconciliation — one portable object. Frame it that way and
-there's no hole to poke.
+**How the value gets resolved:** KRO reads the per-cluster
+`genaiops-platform-config` ConfigMap (a read-only `externalRef` in the RGD) and
+folds its `storageClass` into the PVC. So the resolution is KRO's, not an
+implicit Kubernetes default — the same RGD and instance on every cluster, the
+value supplied by a platform-owned object KRO consumes. The precedence is
+developer override → platform ConfigMap → cluster default (when both empty), so
+the zero-config path still works on a plain laptop kind cluster.
 
 ---
 
@@ -154,14 +160,16 @@ there's no hole to poke.
 
 Open these three, in order:
 1. `instances/sentiment-api.yaml` — the product team. No cloud anywhere.
-2. `rgd/genaiops-rgd.yaml` — the platform contract. No cloud anywhere; just a
-   `storageClass` field that defaults to "use the cluster default."
-3. `clouds/gke/storageclass.yaml` vs `clouds/aks/storageclass.yaml` — **the only
-   files that know about a cloud**, and they belong to the platform team.
+2. `rgd/genaiops-rgd.yaml` — the platform contract. No cloud-specific *values*;
+   it just *reads* the platform ConfigMap (`externalRef`) and resolves the class.
+3. `clouds/gke/` vs `clouds/aks/` — **the only files that know about a cloud**
+   (the `platform-config` ConfigMap + its StorageClass), and they belong to the
+   platform team.
 
 > "Environment detail didn't get pushed up to developers or baked into the
-> template. It's isolated to one folder the platform team owns. Adding EKS is
-> dropping in `clouds/eks/` — the RGD and every instance stay untouched."
+> template. It's isolated to one folder the platform team owns, and KRO reads it.
+> Adding EKS is dropping in `clouds/eks/` — the RGD and every instance stay
+> untouched."
 
 ---
 
@@ -176,9 +184,11 @@ Open these three, in order:
 - **PVC stuck `Pending`:** that's expected until a pod is scheduled —
   `volumeBindingMode: WaitForFirstConsumer`. Check the Deployment came up:
   `kubectl --context kind-genaiops-gke get deploy -l app=sentiment-api`.
-- **Wrong / no default StorageClass:** re-apply the platform config —
-  `kubectl --context kind-genaiops-gke apply -f clouds/gke/storageclass.yaml`
-  and confirm `standard` is no longer marked default (`kubectl get sc`).
+- **Wrong StorageClass on the PVC / GenAIService not reconciling:** the RGD's
+  `externalRef` needs the ConfigMap to exist. Re-apply the platform config —
+  `kubectl --context kind-genaiops-gke apply -f clouds/gke/platform-config.yaml -f clouds/gke/storageclass.yaml`
+  and check the value KRO will read:
+  `kubectl --context kind-genaiops-gke get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}{"\n"}'`.
 - **`ImagePullBackOff`:** the mock image didn't load. Re-run
   `kind load docker-image genaiops/mock-vllm:demo --name genaiops-gke`.
 - **Total fallback:** this runbook narrates the whole flow without a live

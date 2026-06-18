@@ -67,6 +67,14 @@ jobs:
           kubectl apply -f rgd/genaiops-rgd.yaml
           kubectl get rgd
 
+      - name: Apply platform config (the externalRef the RGD reads)
+        run: |
+          # The RGD resolves the per-cluster StorageClass by reading this
+          # ConfigMap (externalRef). Empty value -> inherit the cluster default,
+          # which is exactly the base demo's behavior; this step proves the
+          # externalRef + includeWhen path works on the pinned kro release.
+          kubectl apply -f clouds/kind/platform-config.yaml
+
       - name: Wait for the generated GenAIService CRD to register
         run: |
           for i in $(seq 1 30); do
@@ -325,3 +333,94 @@ jobs:
           kubectl logs -l genaiops.kro.run/finetune --tail=100 --prefix || true
           kubectl logs deploy/mlflow --tail=50 || true
           kubectl logs -n kro deploy/kro --tail=100 || true
+
+  # ===========================================================================
+  # Multi-cloud storage resolution: proves KRO itself resolves the per-cluster
+  # StorageClass by READING the platform-team ConfigMap (externalRef) and folding
+  # its value into the PVC -- the same unchanged RGD and instance, the value
+  # supplied entirely by the cluster-local ConfigMap. We use `standard` (the only
+  # StorageClass a kind cluster ships) so the value is non-empty AND bindable,
+  # which is the exact mechanism a real GKE/AKS cluster uses with premium-rwo /
+  # managed-csi. This is the validation that the externalRef path works on the
+  # pinned kro release.
+  # ===========================================================================
+  storageclass-resolution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLUSTER: genaiops-ci-sc
+      KRO_VERSION: "0.9.1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: genaiops-ci-sc
+          wait: 60s
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Install kro (official chart)
+        run: |
+          helm install kro oci://registry.k8s.io/kro/charts/kro \
+            --namespace kro --create-namespace \
+            ${KRO_VERSION:+--version "${KRO_VERSION}"} \
+            --wait --timeout 5m
+          kubectl wait --for=condition=Available deploy -n kro --all --timeout=180s
+
+      - name: Build and load mock-vllm image
+        run: |
+          docker build -t genaiops/mock-vllm:demo monitoring/mock-vllm
+          kind load docker-image genaiops/mock-vllm:demo --name "${CLUSTER}"
+
+      - name: Apply the RGD and a platform config naming a StorageClass
+        run: |
+          kubectl apply -f rgd/genaiops-rgd.yaml
+          for i in $(seq 1 30); do
+            kubectl get crd genaiservices.kro.run >/dev/null 2>&1 && break
+            echo "waiting for CRD... ($i)"; sleep 4
+          done
+          # Platform team's per-cluster choice. On real clouds this is premium-rwo
+          # / managed-csi; in CI we use kind's `standard` so the PVC can bind.
+          kubectl create configmap genaiops-platform-config \
+            --from-literal=storageClass=standard
+
+      - name: Apply an UNCHANGED instance (no storageClass field)
+        run: |
+          # instances/sentiment-api.yaml never names a StorageClass. If KRO read
+          # the ConfigMap, the PVC must come out with storageClassName=standard.
+          kubectl apply -f instances/sentiment-api.yaml
+
+      - name: Assert KRO folded the ConfigMap value into the PVC
+        run: |
+          set -e
+          echo "Waiting for KRO to create the PVC..."
+          for i in $(seq 1 45); do
+            if kubectl get pvc sentiment-api-cache >/dev/null 2>&1; then break; fi
+            echo "waiting for PVC... ($i)"; sleep 4
+          done
+          scn="$(kubectl get pvc sentiment-api-cache -o jsonpath='{.spec.storageClassName}')"
+          echo "PVC storageClassName resolved to: '${scn}'"
+          test "${scn}" = "standard"
+          echo "OK: KRO resolved the StorageClass from the platform ConfigMap."
+
+          echo "And it actually binds + serves (Deployment becomes Available)..."
+          for i in $(seq 1 45); do
+            if kubectl get deploy sentiment-api >/dev/null 2>&1; then break; fi
+            sleep 4
+          done
+          kubectl wait --for=condition=Available deploy/sentiment-api --timeout=180s
+          echo "OK: end-to-end ConfigMap -> PVC -> bound -> serving."
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get all -A || true
+          kubectl get pvc -o yaml || true
+          kubectl get configmap genaiops-platform-config -o yaml || true
+          kubectl describe rgd genaiservice.kro.run || true
+          kubectl get genaiservice -o yaml || true
+          kubectl logs -n kro deploy/kro --tail=120 || true
