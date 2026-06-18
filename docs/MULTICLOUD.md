@@ -111,6 +111,45 @@ done
 
 ---
 
+## Beat 3.5 — Why this needs KRO (45s, no typing) ← the message to land
+
+The skeptic's objection is *"I can `kubectl apply` the same YAML to two clusters,
+or ship a Helm chart."* Here's why that's not the same thing — say all three:
+
+1. **One object moves, not a pile.** Without KRO the workload is 5+ coupled
+   resources (PVC, Deployment, two Services, monitoring). Moving it means applying
+   them to cluster B in dependency order and deleting them from cluster A without
+   orphaning the PVC. With KRO the workload *is* one `GenAIService`: one apply
+   moves it, one delete reclaims the whole owned graph.
+
+2. **The environment is resolved ON the target cluster — not baked into what you
+   ship.** This is the one that beats Helm/Kustomize. Their portability is
+   *client-side templating*: you render `values-gke` vs `values-aks` (or
+   `overlays/gke` vs `overlays/aks`) **before** apply, so a *different* manifest
+   lands on each cloud and you maintain N drifting per-cloud variants. With KRO
+   you submit the **same** instance everywhere; the RGD running in-cluster plus
+   the cluster's own defaults expand it locally. The move re-renders *nothing* —
+   there was never a per-cloud render.
+
+3. **It keeps reconciling — operator behavior, zero Go.** Helm/Kustomize are
+   apply-time only; after the move they don't self-heal. KRO continuously
+   converges each cluster to the declared graph, and the generated API is
+   provably identical on both (`kubectl --context … explain genaiservice`) — which
+   is *why* the move target is guaranteed to accept the same spec.
+
+> "Without KRO, 'portable' means per-cloud manifests plus a runbook of applies.
+> With KRO the workload is a single API object — one owner, one place where
+> environment branching lives — so moving it is just submitting the same intent
+> to a cluster that speaks the same API, and the cluster fills in its own truth."
+
+**Stay honest:** in *this* demo the storageClass value is filled in by Kubernetes'
+default-StorageClass mechanism, not KRO. KRO's job is making everything else — the
+graph, the ordering, the mock↔gpu / storageClass branching, the single-owner
+lifecycle, and the reconciliation — one portable object. Frame it that way and
+there's no hole to poke.
+
+---
+
 ## Beat 4 — Where the cloud actually lives (30s, no typing)
 
 Open these three, in order:
