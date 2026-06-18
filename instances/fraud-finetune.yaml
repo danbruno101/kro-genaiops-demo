@@ -1,0 +1,24 @@
+# =============================================================================
+# A second team, same template, different guardrail. This team handles a
+# high-stakes fraud model, so it chose approvalPolicy: manual (the default):
+# the platform trains, evaluates, and registers the model in MLflow, but serving
+# stays at 0 replicas until a data scientist reviews the metrics and approves:
+#
+#   kubectl patch finetunemodel fraud-tuned --type merge \
+#     -p '{"spec":{"approved":true}}'
+#
+# Promotion to production is an explicit, auditable change -- not a side effect
+# of training finishing.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: FineTuneModel
+metadata:
+  name: fraud-tuned
+spec:
+  name: fraud-tuned
+  baseModel: "Qwen/Qwen2.5-0.5B-Instruct"
+  dataset: "fraud-signals-v2"
+  epochs: 3
+  approvalPolicy: manual     # serving stays at 0 until a human approves
+  servingReplicas: 1
+  driftDetection: true

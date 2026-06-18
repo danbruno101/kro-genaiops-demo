@@ -1,0 +1,237 @@
+# =============================================================================
+# THE "BEFORE" PICTURE — what a team writes WITHOUT the FineTuneModel template.
+# This is the same fine-tuning lifecycle (train -> register -> approval gate ->
+# serve -> drift -> monitor) expressed as raw KRM. Every field here is something
+# a non-Kubernetes-expert would have to know, get right, and keep consistent
+# across environments. The 10-line FineTuneModel replaces ALL of it.
+#
+# Show this file on screen, scroll it, then cut to instances/sentiment-finetune.yaml.
+# =============================================================================
+---
+# 1) Model-artifacts PVC (training output + serving input)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sentiment-tuned-artifacts
+  labels:
+    app: sentiment-tuned
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 8Gi
+---
+# 2) RBAC so the training Job can self-approve on eval pass (auto mode)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sentiment-tuned-train
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sentiment-tuned-train
+rules:
+  - apiGroups: ["kro.run"]
+    resources: ["finetunemodels"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sentiment-tuned-train
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: sentiment-tuned-train
+subjects:
+  - kind: ServiceAccount
+    name: sentiment-tuned-train
+---
+# 3) Training + evaluation Job (registers to MLflow, conditionally self-approves)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sentiment-tuned-train
+  labels:
+    app: sentiment-tuned
+    app.kubernetes.io/managed-by: human
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: sentiment-tuned
+    spec:
+      serviceAccountName: sentiment-tuned-train
+      restartPolicy: Never
+      containers:
+        - name: trainer
+          image: genaiops/mock-trainer:demo
+          env:
+            - name: MODEL_NAME
+              value: "Qwen/Qwen2.5-0.5B-Instruct"
+            - name: DATASET
+              value: "support-tickets-v3"
+            - name: EPOCHS
+              value: "3"
+            - name: SERVICE_NAME
+              value: "sentiment-tuned"
+            - name: INSTANCE_NAME
+              value: "sentiment-tuned"
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow:5000"
+            - name: APPROVAL_POLICY
+              value: "auto"
+            - name: EVAL_THRESHOLD
+              value: "0.80"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: artifacts
+              mountPath: /mnt/artifacts
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: sentiment-tuned-artifacts
+---
+# 4) Serving Deployment — replicas hand-gated on approval (here: pre-approved=2)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentiment-tuned
+  labels:
+    app: sentiment-tuned
+    app.kubernetes.io/managed-by: human
+spec:
+  replicas: 2   # a human must remember to flip this from 0 once approved
+  selector:
+    matchLabels:
+      app: sentiment-tuned
+  template:
+    metadata:
+      labels:
+        app: sentiment-tuned
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: server
+          image: genaiops/mock-vllm:demo
+          args: ["--model", "Qwen/Qwen2.5-0.5B-Instruct", "--mock"]
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: MODEL_NAME
+              value: "Qwen/Qwen2.5-0.5B-Instruct"
+            - name: SERVICE_NAME
+              value: "sentiment-tuned"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+          volumeMounts:
+            - name: artifacts
+              mountPath: /root/.cache
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: sentiment-tuned-artifacts
+---
+# 5) Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentiment-tuned
+  labels:
+    app: sentiment-tuned
+spec:
+  selector:
+    app: sentiment-tuned
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+---
+# 6) Metrics Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: sentiment-tuned-metrics
+  labels:
+    app: sentiment-tuned
+    genaiops.kro.run/scrape: "true"
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: sentiment-tuned
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: 8000
+---
+# 7) Drift detector Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sentiment-tuned-drift
+  labels:
+    app: sentiment-tuned-drift
+    app.kubernetes.io/managed-by: human
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sentiment-tuned-drift
+  template:
+    metadata:
+      labels:
+        app: sentiment-tuned-drift
+        genaiops.kro.run/service: sentiment-tuned
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: drift
+          image: genaiops/mock-drift:demo
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: SERVICE_NAME
+              value: "sentiment-tuned"
+            - name: TARGET
+              value: "http://sentiment-tuned"
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+---
+# ...and you'd STILL have to wire it all together by hand: keep the SA/Role/
+# RoleBinding names in sync with the Job, remember to scale serving from 0 only
+# after approval, hand-maintain a ServiceMonitor/HPA/PDB/NetworkPolicies, and
+# fork per-cloud storageClass / accelerator variants of the Job AND the
+# Deployment — multiplied by every model and every environment. That sprawl is
+# the friction the FineTuneModel abstraction removes.

@@ -1,0 +1,381 @@
+# =============================================================================
+# Fine-Tuning ResourceGraphDefinition  (SECOND use-case)
+# -----------------------------------------------------------------------------
+# This is the PLATFORM TEAM's artifact for the fine-tuning lifecycle. Authored
+# once, applied once per cluster. It defines a new cluster-wide API:
+# kind "FineTuneModel" (group kro.run) -- completely independent of the first
+# use-case's "GenAIService". Adding or deleting this RGD has zero effect on
+# GenAIService: each use-case is its own CRD with its own kro dynamic controller.
+# A future use-case 3 drops in the same way (see docs/ADDING-A-USE-CASE.md).
+#
+# What a product team gets from ~10 lines of YAML:
+#   train (infra they pick) -> evaluate -> register to MLflow -> approval gate
+#   -> serve (only once approved) -> drift detection -> Prometheus observability
+#
+# Portability thesis (same as GenAIService): this exact file applies unchanged
+# on kind / EKS / GKE / AKS. Only field VALUES vary per environment
+# (trainMode/servingMode mock<->gpu, storageClass) -- never the manifest shape.
+# The control plane (MLflow at http://mlflow:5000, Prometheus) is constant
+# across every cloud; only the data-plane infra varies, and it varies by field.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: finetunemodel.kro.run
+spec:
+  # --- The API surface developers see (SimpleSchema) -------------------------
+  schema:
+    apiVersion: v1alpha1
+    kind: FineTuneModel
+    spec:
+      # Required: human-facing knobs only. Everything else is platform default.
+      name: string
+      baseModel: string | default="Qwen/Qwen2.5-0.5B-Instruct"
+      # Training data reference (a curated dataset the platform knows how to mount).
+      dataset: string | default="support-tickets-v3"
+      epochs: integer | default=3
+      # "mock" runs anywhere (CPU, zero GPU). "gpu" requests an accelerator.
+      # This single field is the whole training-side portability story on stage.
+      trainMode: string | default="mock"
+
+      # --- Evaluation + approval guardrail -----------------------------------
+      # "manual" (default, the safe guardrail): a data scientist reviews the
+      # eval metrics in MLflow and approves by setting spec.approved=true.
+      # "auto": the train+eval Job promotes the model itself, but ONLY if the
+      # evaluation score clears evalThreshold.
+      approvalPolicy: string | default="manual"
+      # Minimum eval_accuracy required for auto-approval.
+      evalThreshold: string | default="0.80"
+      # THE GATE. Serving runs 0 replicas until this is true. It is set either
+      # by the Job (auto, on eval pass) or by a human (manual) -- an auditable,
+      # reviewable one-field change. See the servingDeployment replicas below.
+      approved: boolean | default=false
+
+      # --- Serving (post-approval) -------------------------------------------
+      servingReplicas: integer | default=1
+      servingMode: string | default="mock"
+      # Storage for the model-artifacts PVC (shared by training + serving).
+      cacheSize: string | default="8Gi"
+      # Optional: override the cluster's default StorageClass. Empty = default.
+      storageClass: string | default=""
+
+      # --- Post-deploy -------------------------------------------------------
+      driftDetection: boolean | default=true
+      monitoring: boolean | default=true
+    status:
+      # Surfaced back onto the FineTuneModel object for `kubectl get`.
+      trainingComplete: '${trainJob.status.succeeded}'
+      approved: '${schema.spec.approved}'
+      endpoint: '${service.spec.clusterIP}'
+      readyReplicas: '${servingDeployment.status.readyReplicas}'
+
+  # --- The resources the single API expands into -----------------------------
+  resources:
+    # 1) Model-artifacts PVC: training writes the fine-tuned weights here, and
+    #    the serving Deployment mounts the same claim. Split into two
+    #    mutually-exclusive includeWhen variants for the same StorageClass
+    #    portability reason as GenAIService: an *empty* storageClassName field
+    #    disables dynamic provisioning, so we must omit the field entirely by
+    #    default and only emit it when the developer overrides it. Exactly one
+    #    of these is ever created; both share one name.
+    #
+    #    1a) Default: no storageClassName -> cluster default StorageClass.
+    - id: artifacts
+      includeWhen:
+        - ${schema.spec.storageClass == ""}
+      template:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: ${schema.spec.name}-artifacts
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: '${schema.spec.cacheSize}'
+
+    #    1b) Override: gp3 on EKS, premium-rwo on GKE, managed-csi on AKS.
+    #        Same name as 1a -- a field, not a manifest rewrite.
+    - id: artifactsOverride
+      includeWhen:
+        - ${schema.spec.storageClass != ""}
+      template:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: ${schema.spec.name}-artifacts
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          storageClassName: '${schema.spec.storageClass}'
+          resources:
+            requests:
+              storage: '${schema.spec.cacheSize}'
+
+    # 2) RBAC for the train+eval Job's self-approval. In auto mode the Job needs
+    #    to PATCH this FineTuneModel's spec.approved back to true. A namespaced
+    #    Role scoped to exactly that verb/resource is the least privilege that
+    #    makes auto-promotion work. The Job hits the API directly (urllib + the
+    #    mounted ServiceAccount token); no kubectl in the image.
+    #    Names are per-instance (${name}-train) so multiple FineTuneModels --
+    #    and any future use-case -- never collide on cluster state.
+    - id: trainSA
+      template:
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: ${schema.spec.name}-train
+
+    - id: trainRole
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        metadata:
+          name: ${schema.spec.name}-train
+        rules:
+          - apiGroups: ["kro.run"]
+            resources: ["finetunemodels"]
+            verbs: ["get", "patch"]
+
+    - id: trainRoleBinding
+      template:
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: ${schema.spec.name}-train
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: Role
+          name: ${schema.spec.name}-train
+        subjects:
+          - kind: ServiceAccount
+            name: ${schema.spec.name}-train
+
+    # 3) The training Job: train -> evaluate -> register to MLflow ->
+    #    conditionally self-approve. A mock trainer keeps this runnable on a
+    #    CPU laptop with zero GPU; in gpu mode the RGD requests an accelerator
+    #    and (in a real platform) you'd swap the image for a real trainer.
+    #    The Job mounts the artifacts PVC by its well-known name -- NOT via a
+    #    CEL ref -- to avoid kro gating the Job on the PVC becoming Bound, which
+    #    deadlocks under the default WaitForFirstConsumer StorageClass (same
+    #    note as GenAIService).
+    - id: trainJob
+      template:
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: ${schema.spec.name}-train
+          labels:
+            app: '${schema.spec.name}'
+            app.kubernetes.io/managed-by: kro
+            genaiops.kro.run/finetune: '${schema.spec.name}'
+        spec:
+          backoffLimit: 1
+          template:
+            metadata:
+              labels:
+                app: '${schema.spec.name}'
+                genaiops.kro.run/finetune: '${schema.spec.name}'
+            spec:
+              serviceAccountName: '${schema.spec.name}-train'
+              restartPolicy: Never
+              containers:
+                - name: trainer
+                  image: genaiops/mock-trainer:demo
+                  env:
+                    - name: MODEL_NAME
+                      value: '${schema.spec.baseModel}'
+                    - name: DATASET
+                      value: '${schema.spec.dataset}'
+                    - name: EPOCHS
+                      value: '${string(schema.spec.epochs)}'
+                    - name: SERVICE_NAME
+                      value: '${schema.spec.name}'
+                    - name: INSTANCE_NAME
+                      value: '${schema.spec.name}'
+                    - name: MLFLOW_TRACKING_URI
+                      value: "http://mlflow:5000"
+                    - name: APPROVAL_POLICY
+                      value: '${schema.spec.approvalPolicy}'
+                    - name: EVAL_THRESHOLD
+                      value: '${schema.spec.evalThreshold}'
+                  resources:
+                    requests:
+                      cpu: '${schema.spec.trainMode == "gpu" ? "2" : "100m"}'
+                      memory: '${schema.spec.trainMode == "gpu" ? "8Gi" : "128Mi"}'
+                    # CEL conditional requests a GPU ONLY in gpu mode.
+                    limits: '${schema.spec.trainMode == "gpu" ? {"nvidia.com/gpu": "1"} : {}}'
+                  volumeMounts:
+                    - name: artifacts
+                      mountPath: /mnt/artifacts
+              volumes:
+                - name: artifacts
+                  persistentVolumeClaim:
+                    claimName: '${schema.spec.name}-artifacts'
+
+    # 4) The serving Deployment for the fine-tuned model. Reuses the same
+    #    mock-vllm image and serving shape as GenAIService -- the fine-tuned
+    #    model is served exactly like any other.
+    #
+    #    THE APPROVAL GATE lives in replicas: the Deployment always exists (so
+    #    `kubectl get deploy` shows the gated state), but runs 0 pods until
+    #    spec.approved is true. Promotion to production is therefore an explicit,
+    #    audited data change -- not a side effect of training finishing. kro
+    #    re-reconciles the moment approved flips (Job in auto, human in manual)
+    #    and scales serving 0 -> servingReplicas.
+    - id: servingDeployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: '${schema.spec.name}'
+          labels:
+            app: '${schema.spec.name}'
+            app.kubernetes.io/managed-by: kro
+            genaiops.kro.run/service: '${schema.spec.name}'
+        spec:
+          replicas: '${schema.spec.approved ? schema.spec.servingReplicas : 0}'
+          selector:
+            matchLabels:
+              app: '${schema.spec.name}'
+          template:
+            metadata:
+              labels:
+                app: '${schema.spec.name}'
+                genaiops.kro.run/service: '${schema.spec.name}'
+              annotations:
+                prometheus.io/scrape: '${schema.spec.monitoring ? "true" : "false"}'
+                prometheus.io/port: "8000"
+                prometheus.io/path: "/metrics"
+            spec:
+              containers:
+                - name: server
+                  # mock mode: the same OpenAI-compatible stub as GenAIService.
+                  # gpu mode: swap to vLLM, loading the fine-tuned weights.
+                  image: '${schema.spec.servingMode == "gpu" ? "vllm/vllm-openai:latest" : "genaiops/mock-vllm:demo"}'
+                  args: '${schema.spec.servingMode == "gpu" ? ["--model", schema.spec.baseModel] : ["--model", schema.spec.baseModel, "--mock"]}'
+                  ports:
+                    - name: http
+                      containerPort: 8000
+                  env:
+                    - name: MODEL_NAME
+                      value: '${schema.spec.baseModel}'
+                    - name: SERVICE_NAME
+                      value: '${schema.spec.name}'
+                  resources:
+                    requests:
+                      cpu: '${schema.spec.servingMode == "gpu" ? "2" : "100m"}'
+                      memory: '${schema.spec.servingMode == "gpu" ? "8Gi" : "128Mi"}'
+                    limits: '${schema.spec.servingMode == "gpu" ? {"nvidia.com/gpu": "1"} : {}}'
+                  volumeMounts:
+                    - name: artifacts
+                      mountPath: /root/.cache
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: 8000
+                    initialDelaySeconds: 3
+                    periodSeconds: 5
+              volumes:
+                - name: artifacts
+                  persistentVolumeClaim:
+                    # Mount the fine-tuned weights by well-known name (see the Job
+                    # note above) -- never via a CEL ref, to avoid the PVC bind
+                    # deadlock under WaitForFirstConsumer.
+                    claimName: '${schema.spec.name}-artifacts'
+
+    # 5) Service: stable in-cluster endpoint for the served model.
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: '${schema.spec.name}'
+          labels:
+            app: '${schema.spec.name}'
+            genaiops.kro.run/service: '${schema.spec.name}'
+        spec:
+          selector:
+            app: '${schema.spec.name}'
+          ports:
+            - name: http
+              port: 80
+              targetPort: 8000
+
+    # 6) Monitoring wiring, included ONLY when spec.monitoring is true.
+    - id: monitor
+      includeWhen:
+        - ${schema.spec.monitoring}
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}-metrics
+          labels:
+            app: '${schema.spec.name}'
+            genaiops.kro.run/scrape: "true"
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "8000"
+            prometheus.io/path: "/metrics"
+        spec:
+          selector:
+            app: '${schema.spec.name}'
+          ports:
+            - name: metrics
+              port: 8000
+              targetPort: 8000
+
+    # 7) Drift detector, included ONLY when spec.driftDetection is true.
+    #    A long-running sidecar Deployment that watches the live model and emits
+    #    a genaiops_drift_score gauge on :8000/metrics. It carries the same
+    #    prometheus.io/scrape annotations + genaiops.kro.run/service label as the
+    #    serving pods, so the EXISTING Prometheus (shared platform infra) scrapes
+    #    it automatically -- zero Prometheus config change for the new use-case.
+    - id: driftDetector
+      includeWhen:
+        - ${schema.spec.driftDetection}
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: ${schema.spec.name}-drift
+          labels:
+            app: ${schema.spec.name}-drift
+            app.kubernetes.io/managed-by: kro
+            genaiops.kro.run/service: '${schema.spec.name}'
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app: ${schema.spec.name}-drift
+          template:
+            metadata:
+              labels:
+                app: ${schema.spec.name}-drift
+                genaiops.kro.run/service: '${schema.spec.name}'
+              annotations:
+                prometheus.io/scrape: "true"
+                prometheus.io/port: "8000"
+                prometheus.io/path: "/metrics"
+            spec:
+              containers:
+                - name: drift
+                  image: genaiops/mock-drift:demo
+                  ports:
+                    - name: http
+                      containerPort: 8000
+                  env:
+                    - name: SERVICE_NAME
+                      value: '${schema.spec.name}'
+                    - name: TARGET
+                      value: 'http://${schema.spec.name}'
+                  resources:
+                    requests:
+                      cpu: "50m"
+                      memory: "64Mi"
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: 8000
+                    initialDelaySeconds: 3
+                    periodSeconds: 5

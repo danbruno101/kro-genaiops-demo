@@ -1,0 +1,70 @@
+# =============================================================================
+# Minimal MLflow for the fine-tuning use-case. Shared PLATFORM infra, deployed
+# once (like prometheus.yaml) and reused by every fine-tuning instance -- and by
+# any future use-case that wants an experiment tracker / model registry.
+#
+# The train+eval Job registers its run, metrics, and the produced model here via
+# MLflow's REST API. A data scientist reviews the metrics here before approving
+# a model for serving (the manual gate). Single replica, SQLite backend,
+# emptyDir artifact store: demo-grade, not for production.
+#
+# This endpoint (http://mlflow:5000) is identical on kind / EKS / GKE / AKS --
+# the constant control plane behind the portability story.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  labels:
+    app: mlflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow
+  template:
+    metadata:
+      labels:
+        app: mlflow
+    spec:
+      containers:
+        - name: mlflow
+          image: ghcr.io/mlflow/mlflow:latest
+          command: ["mlflow"]
+          args:
+            - "server"
+            - "--backend-store-uri"
+            - "sqlite:////mlflow/mlflow.db"
+            - "--default-artifact-root"
+            - "/mlflow/artifacts"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "5000"
+          ports:
+            - containerPort: 5000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: store
+              mountPath: /mlflow
+      volumes:
+        - name: store
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow
+  labels:
+    app: mlflow
+spec:
+  selector:
+    app: mlflow
+  ports:
+    - port: 5000
+      targetPort: 5000
