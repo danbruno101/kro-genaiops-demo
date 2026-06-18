@@ -1,0 +1,165 @@
+# =============================================================================
+# GenAIOps ResourceGraphDefinition
+# -----------------------------------------------------------------------------
+# This is the PLATFORM TEAM's artifact. Authored once, applied once per cluster.
+# It defines a new cluster-wide API: kind "GenAIService" (group kro.run).
+#
+# The portability thesis: this exact file applies unchanged on kind, EKS, GKE,
+# AKS, or bare metal. The only thing that varies per environment is which
+# storageClass / accelerator the developer (or a default) selects -- and that
+# is exposed as a *field*, not hardcoded into manifests. No rewrites, no
+# environment-specific templating, no Go operator.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: genaiservice.kro.run
+spec:
+  # --- The API surface developers see (SimpleSchema) -------------------------
+  schema:
+    apiVersion: v1alpha1
+    kind: GenAIService
+    spec:
+      # Required: human-facing knobs only. Everything else is platform default.
+      name: string
+      model: string | default="Qwen/Qwen2.5-0.5B-Instruct"
+      # replicas of the serving deployment
+      replicas: integer | default=1
+      # "mock" runs anywhere (CPU, zero GPU). "gpu" requests an accelerator.
+      # This single field is the whole portability story on stage.
+      mode: string | default="mock"
+      # Storage size for the model cache PVC.
+      cacheSize: string | default="8Gi"
+      # Optional: override the cluster's default StorageClass. Empty = default.
+      storageClass: string | default=""
+      # Toggle Prometheus scraping wiring on/off.
+      monitoring: boolean | default=true
+    status:
+      # Surfaced back onto the GenAIService object for `kubectl get`.
+      endpoint: '${service.spec.clusterIP}'
+      readyReplicas: '${deployment.status.readyReplicas}'
+      conditions: '${deployment.status.conditions}'
+
+  # --- The resources the single API expands into -----------------------------
+  # kro infers the DAG from the CEL references between these. No manual ordering.
+  resources:
+    # 1) Model cache: a PVC so model weights survive pod restarts.
+    - id: cache
+      template:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: ${schema.spec.name}-cache
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          # CEL conditional: only set storageClassName when the user provided one,
+          # otherwise omit it and inherit the cluster default. This is the line
+          # that makes the same RGD portable across clouds with different SCs.
+          storageClassName: '${schema.spec.storageClass != "" ? schema.spec.storageClass : ""}'
+          resources:
+            requests:
+              storage: '${schema.spec.cacheSize}'
+
+    # 2) The serving Deployment (vLLM-compatible interface).
+    - id: deployment
+      template:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: '${schema.spec.name}'
+          labels:
+            app: '${schema.spec.name}'
+            app.kubernetes.io/managed-by: kro
+            genaiops.kro.run/service: '${schema.spec.name}'
+        spec:
+          replicas: '${schema.spec.replicas}'
+          selector:
+            matchLabels:
+              app: '${schema.spec.name}'
+          template:
+            metadata:
+              labels:
+                app: '${schema.spec.name}'
+                genaiops.kro.run/service: '${schema.spec.name}'
+              annotations:
+                prometheus.io/scrape: '${schema.spec.monitoring ? "true" : "false"}'
+                prometheus.io/port: "8000"
+                prometheus.io/path: "/metrics"
+            spec:
+              containers:
+                - name: server
+                  # mock mode: a tiny OpenAI-compatible stub that also emits
+                  # Prometheus metrics on :8000/metrics. gpu mode: swap to vLLM.
+                  image: '${schema.spec.mode == "gpu" ? "vllm/vllm-openai:latest" : "genaiops/mock-vllm:demo"}'
+                  args: '${schema.spec.mode == "gpu" ? ["--model", schema.spec.model] : ["--model", schema.spec.model, "--mock"]}'
+                  ports:
+                    - name: http
+                      containerPort: 8000
+                  env:
+                    - name: MODEL_NAME
+                      value: '${schema.spec.model}'
+                    - name: SERVICE_NAME
+                      value: '${schema.spec.name}'
+                  resources:
+                    requests:
+                      cpu: '${schema.spec.mode == "gpu" ? "2" : "100m"}'
+                      memory: '${schema.spec.mode == "gpu" ? "8Gi" : "128Mi"}'
+                    # CEL conditional adds the GPU request ONLY in gpu mode.
+                    limits: '${schema.spec.mode == "gpu" ? {"nvidia.com/gpu": "1"} : {}}'
+                  volumeMounts:
+                    - name: cache
+                      mountPath: /root/.cache
+                  readinessProbe:
+                    httpGet:
+                      path: /health
+                      port: 8000
+                    initialDelaySeconds: 3
+                    periodSeconds: 5
+              volumes:
+                - name: cache
+                  persistentVolumeClaim:
+                    claimName: '${cache.metadata.name}'
+
+    # 3) Service: stable in-cluster endpoint for the model.
+    - id: service
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: '${schema.spec.name}'
+          labels:
+            app: '${schema.spec.name}'
+            genaiops.kro.run/service: '${schema.spec.name}'
+        spec:
+          selector:
+            app: '${schema.spec.name}'
+          ports:
+            - name: http
+              port: 80
+              targetPort: 8000
+
+    # 4) Monitoring wiring, included ONLY when spec.monitoring is true.
+    #    kro's `includeWhen` means the developer's one boolean adds/removes a
+    #    whole resource from the graph -- no separate manifest to maintain.
+    - id: monitor
+      includeWhen:
+        - ${schema.spec.monitoring}
+      template:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: ${schema.spec.name}-metrics
+          labels:
+            app: '${schema.spec.name}'
+            genaiops.kro.run/scrape: "true"
+          annotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "8000"
+            prometheus.io/path: "/metrics"
+        spec:
+          selector:
+            app: '${schema.spec.name}'
+          ports:
+            - name: metrics
+              port: 8000
+              targetPort: 8000

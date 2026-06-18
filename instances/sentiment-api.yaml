@@ -1,0 +1,14 @@
+# =============================================================================
+# The entire developer experience. Ten lines. No Deployment, no Service,
+# no PVC, no Prometheus annotations, no Argo. The developer never sees KRM.
+# This same file applies identically on kind, EKS, GKE, and AKS.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: GenAIService
+metadata:
+  name: sentiment-api
+spec:
+  name: sentiment-api
+  model: "Qwen/Qwen2.5-0.5B-Instruct"
+  replicas: 2
+  monitoring: true
