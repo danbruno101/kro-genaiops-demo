@@ -1,0 +1,24 @@
+# =============================================================================
+# AKS environment config (platform-team owned).
+# -----------------------------------------------------------------------------
+# Makes a cluster behave like AKS for the demo: the default StorageClass is
+# named `managed-csi` -- exactly what AKS calls its managed-disk default class.
+# A product instance that leaves `storageClass` empty inherits THIS, so its
+# PVC binds to `managed-csi` without the product team ever naming it.
+#
+# SIMULATION NOTE: provisioner is kind's built-in `rancher.io/local-path` so the
+# demo runs cloud-free on a laptop. On a real AKS cluster this same object uses
+# provisioner `disk.csi.azure.com` with `skuName: Premium_LRS`; nothing else
+# changes.
+# =============================================================================
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: managed-csi
+  labels:
+    demo.genaiops/cloud: aks
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: rancher.io/local-path
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete

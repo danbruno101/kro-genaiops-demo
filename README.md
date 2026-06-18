@@ -65,6 +65,9 @@ note at the bottom.
 | `monitoring/` | Lightweight Prometheus, MLflow, and the mock-vllm / mock-trainer / mock-drift image sources. |
 | `scripts/setup.sh` / `teardown.sh` | One-command cluster up/down for use-case 1 (kind). |
 | `scripts/setup-finetune.sh` / `teardown-finetune.sh` | Layered up/down for use-case 2 (additive, independent). |
+| `scripts/setup-multicloud.sh` / `teardown-multicloud.sh` | **The portability thesis, live.** Stands up two kind clusters that stand in for two clouds (GKE / AKS) and moves the same workload between them. |
+| `clouds/` | **Platform-team environment config.** The only place cloud details live (per-cluster default StorageClass) — never the RGD, never an instance. See `clouds/README.md`. |
+| `docs/MULTICLOUD.md` | **Minute-by-minute multi-cloud runbook.** Deploy one spec to "GKE", move it to "AKS", no diff. |
 | `docs/RUNBOOK.md` | **Minute-by-minute stage script.** Read this before presenting. |
 | `genaiops-kro-deck.pptx` | KubeCon talk deck (use-case 1): impact slide + two-panel architecture diagram (kind / EKS / GKE / AKS). |
 | `docs/maintainers-summit-deck.md` | Maintainers Summit deck (both use-cases), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/maintainers-summit-deck.md -o deck.pptx`. |
@@ -143,6 +146,37 @@ Each use-case runs independently, so you can show one or both:
 `scripts/setup-finetune.sh` is additive and idempotent; `scripts/teardown-finetune.sh`
 removes just use-case 2 (instances, RGD, MLflow) without touching use-case 1 or
 the cluster.
+
+## Simulating multi-cloud locally (deploy to "GKE" and "AKS")
+
+The headline takeaway — *deploy the same solution to multiple clouds* — is now
+runnable on a laptop, no cloud account or GPU required:
+
+```bash
+./scripts/setup-multicloud.sh
+# Product team ships one spec — names no cloud, no storage class:
+kubectl --context kind-genaiops-gke apply -f instances/sentiment-api.yaml   # binds premium-rwo
+# Platform team moves the SAME spec to the other cloud — no edit:
+kubectl --context kind-genaiops-aks apply -f instances/sentiment-api.yaml   # binds managed-csi
+```
+
+It stands up **two kind clusters that stand in for two clouds**
+(`kind-genaiops-gke`, `kind-genaiops-aks`). The clean separation is the whole
+point:
+
+- **Product teams** ship one ~9-line instance and never name a cloud or a
+  StorageClass — so they never think about where it runs.
+- **The platform team** owns the environment: each cluster's *default*
+  StorageClass is set from `clouds/<cloud>/` (`premium-rwo` for GKE,
+  `managed-csi` for AKS). Moving a workload to another cloud is switching the
+  `kubectl --context`; the spec and the RGD don't change.
+
+The cloud-specific detail is isolated to `clouds/` (platform-team owned) — it
+never leaks into the RGD or any instance. Follow `docs/MULTICLOUD.md` for the
+staged walkthrough, and `clouds/README.md` for how to add a third cloud (EKS is
+included as a worked example). To run against *real* GKE/AKS clusters, swap the
+StorageClass provisioner for the cloud's CSI driver and point the same RGD and
+instance at that kubeconfig context.
 
 ## How portability actually works here
 
