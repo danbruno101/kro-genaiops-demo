@@ -1,0 +1,20 @@
+# =============================================================================
+# kind (laptop) platform config (platform-team owned) — a single KRO-owned object.
+# -----------------------------------------------------------------------------
+# The base single-cluster demo (scripts/setup.sh) runs on kind. The GenAIService
+# RGD requires the genaiops-platform-config ConfigMap to exist before any
+# GenAIService reconciles, so a ClusterPlatform instance ships one here too.
+#
+# storageClass is intentionally EMPTY and manageStorageClass is false: on a
+# laptop we inherit kind's built-in `standard` default class (the bottom of the
+# resolution chain — KRO omits storageClassName and Kubernetes uses the default).
+# Nothing extra is created; KRO just owns the ConfigMap.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: ClusterPlatform
+metadata:
+  name: cluster-platform
+spec:
+  cloud: kind
+  storageClass: ""
+  manageStorageClass: false

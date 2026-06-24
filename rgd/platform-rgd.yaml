@@ -1,0 +1,95 @@
+# =============================================================================
+# ClusterPlatform ResourceGraphDefinition  (platform-team artifact)
+# -----------------------------------------------------------------------------
+# Applied ONCE PER CLUSTER by the platform team. It turns the per-cluster
+# environment config -- which used to be two hand-applied manifests in
+# clouds/<cloud>/ (a StorageClass + a ConfigMap) -- into a single KRO-owned
+# object. After this, the ONLY thing applied to a cluster is KRO: kro itself,
+# this RGD + a ClusterPlatform instance, the workload RGD(s), and the developer
+# instances. Nothing is `kubectl apply`-ed by hand.
+#
+# It expands a ClusterPlatform instance into:
+#   * genaiops-platform-config ConfigMap  (ALWAYS) -- the object the GenAIService
+#     RGD reads via externalRef to resolve each cluster's StorageClass.
+#   * a StorageClass                       (only when manageStorageClass: true).
+#
+# Why the manageStorageClass toggle (this is the whole cross-cloud story):
+#   * GKE / AKS already SHIP their named class (premium-rwo / managed-csi), so
+#     KRO must NOT create it (that would collide) -> manageStorageClass: false,
+#     KRO just references it via the ConfigMap.
+#   * EKS ships NO default class -- even in Auto Mode, which only provides the
+#     built-in EBS CSI *driver*. A StorageClass is a plain K8s object, so KRO
+#     CREATES it -> manageStorageClass: true. Auto Mode removes the one piece
+#     KRO couldn't own (the CSI driver addon + IAM), leaving only the class.
+#   * kind (sim) ships only `standard`, so the GKE/AKS/EKS *simulations* set
+#     manageStorageClass: true with provisioner rancher.io/local-path to mint the
+#     named class locally; the base single-cluster kind demo leaves it false.
+# Net: on every target, everything applied to the cluster is KRO. 100% KRO.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: ResourceGraphDefinition
+metadata:
+  name: clusterplatform.kro.run
+spec:
+  schema:
+    apiVersion: v1alpha1
+    kind: ClusterPlatform
+    spec:
+      # Cosmetic: labels the emitted objects with the cloud they represent.
+      cloud: string | default="kind"
+      # The class name GenAI workloads use on this cluster. Empty -> inherit the
+      # cluster default (e.g. base kind). Written into the ConfigMap KRO reads.
+      storageClass: string | default=""
+      # true  -> KRO creates the StorageClass below (EKS, or any kind sim).
+      # false -> the class already exists on the cluster (GKE/AKS); ConfigMap only.
+      manageStorageClass: boolean | default=false
+      # The CSI provisioner for the class KRO creates. Defaults to kind's
+      # local-path so the simulated demo runs cloud-free. Real values:
+      #   GKE  pd.csi.storage.gke.io   AKS  disk.csi.azure.com
+      #   EKS Auto Mode  ebs.csi.eks.amazonaws.com
+      provisioner: string | default="rancher.io/local-path"
+      # StorageClass.parameters.type (e.g. gp3 on EKS, pd-ssd on GKE). Empty omits it.
+      volumeType: string | default=""
+      # EKS gp3 wants encryption on; adds parameters.encrypted="true" when set.
+      encrypted: boolean | default=false
+      # Mark the created class the cluster default.
+      makeDefault: boolean | default=true
+    status:
+      # Safe reference to an always-present resource (the ConfigMap).
+      platformConfig: '${configMap.metadata.name}'
+
+  resources:
+    # The object the GenAIService RGD reads via externalRef. Always created, so
+    # KRO -- not a hand-applied manifest -- owns the per-cluster storage choice.
+    - id: configMap
+      template:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: genaiops-platform-config
+          labels:
+            demo.genaiops/cloud: '${schema.spec.cloud}'
+            app.kubernetes.io/managed-by: kro
+        data:
+          storageClass: '${schema.spec.storageClass}'
+
+    # Created ONLY where the cloud doesn't ship the class (EKS, kind sims).
+    - id: storageClass
+      includeWhen:
+        - ${schema.spec.manageStorageClass}
+      template:
+        apiVersion: storage.k8s.io/v1
+        kind: StorageClass
+        metadata:
+          name: '${schema.spec.storageClass}'
+          labels:
+            demo.genaiops/cloud: '${schema.spec.cloud}'
+            app.kubernetes.io/managed-by: kro
+          annotations:
+            storageclass.kubernetes.io/is-default-class: '${schema.spec.makeDefault ? "true" : "false"}'
+        provisioner: '${schema.spec.provisioner}'
+        # CEL-conditional map (same pattern as the GPU limits in genaiops-rgd):
+        # encrypted -> {type,encrypted}; else type only; else {} (e.g. local-path).
+        parameters: '${schema.spec.encrypted ? {"type": schema.spec.volumeType, "encrypted": "true"} : (schema.spec.volumeType != "" ? {"type": schema.spec.volumeType} : {})}'
+        volumeBindingMode: WaitForFirstConsumer
+        reclaimPolicy: Delete

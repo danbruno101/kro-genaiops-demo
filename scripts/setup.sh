@@ -46,19 +46,30 @@ say "Deploying Prometheus (lightweight, for the monitoring beat)"
 kubectl apply -f "$(dirname "$0")/../monitoring/prometheus.yaml"
 kubectl wait --for=condition=Available deploy/prometheus --timeout=120s || true
 
-say "Applying platform config (platform team owns this; KRO reads it per-cluster)"
-# The RGD reads genaiops-platform-config via externalRef to resolve the
-# per-cluster StorageClass. On a laptop kind cluster it's empty = cluster default.
-kubectl apply -f "$(dirname "$0")/../clouds/kind/platform-config.yaml"
+REPO="$(dirname "$0")/.."
 
-say "Applying the GenAIOps ResourceGraphDefinition (platform team artifact)"
-kubectl apply -f "$(dirname "$0")/../rgd/genaiops-rgd.yaml"
+say "Applying the platform RGDs (platform team artifacts)"
+# ClusterPlatform: KRO owns the per-cluster env config (the genaiops-platform-config
+# ConfigMap, and the StorageClass where the cloud doesn't ship one). GenAIService:
+# the developer-facing serving API, which READS that ConfigMap via externalRef.
+kubectl apply -f "${REPO}/rgd/platform-rgd.yaml"
+kubectl apply -f "${REPO}/rgd/genaiops-rgd.yaml"
 
-say "Waiting for the generated GenAIService CRD to register"
+say "Waiting for the generated CRDs to register"
 for i in $(seq 1 30); do
-  if kubectl get crd genaiservices.kro.run >/dev/null 2>&1; then
-    echo "GenAIService API is live."; break
+  if kubectl get crd clusterplatforms.kro.run genaiservices.kro.run >/dev/null 2>&1; then
+    echo "ClusterPlatform + GenAIService APIs are live."; break
   fi
+  sleep 2
+done
+
+say "Applying the ClusterPlatform instance (KRO creates the platform config)"
+# On a laptop kind cluster this just creates genaiops-platform-config with an
+# empty storageClass (inherit kind's default). KRO -- not a hand-applied manifest
+# -- now owns it. Wait for it before any GenAIService reconciles (externalRef).
+kubectl apply -f "${REPO}/clouds/kind/platform.yaml"
+for i in $(seq 1 30); do
+  kubectl get configmap genaiops-platform-config >/dev/null 2>&1 && break
   sleep 2
 done
 

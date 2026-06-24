@@ -54,6 +54,7 @@ note at the bottom.
 | Path | Role in the talk |
 |------|------------------|
 | `rgd/genaiops-rgd.yaml` | **Use-case 1 platform artifact.** Defines the `GenAIService` (serving) API via one ResourceGraphDefinition. |
+| `rgd/platform-rgd.yaml` | **Platform-bootstrap artifact.** Defines the `ClusterPlatform` API: KRO owns each cluster's `genaiops-platform-config` ConfigMap and (where the cloud ships none — e.g. EKS) its StorageClass. Makes the demo 100% KRO in-cluster. |
 | `instances/sentiment-api.yaml` | **The developer experience.** 9 lines of real config. The payoff. |
 | `instances/catalog.yaml` | **Self-service catalog.** Three teams, one template — the portability thesis. |
 | `docs/before-raw-krm.yaml` | **The "before."** 92 lines of raw KRM the template replaces. |
@@ -66,10 +67,10 @@ note at the bottom.
 | `scripts/setup.sh` / `teardown.sh` | One-command cluster up/down for use-case 1 (kind). |
 | `scripts/setup-finetune.sh` / `teardown-finetune.sh` | Layered up/down for use-case 2 (additive, independent). |
 | `scripts/setup-multicloud.sh` / `teardown-multicloud.sh` | **The portability thesis, live (local).** Stands up two kind clusters that stand in for two clouds (GKE / AKS) and moves the same workload between them. |
-| `scripts/deploy-to-cluster.sh` / `deploy-multicloud-real.sh` | **The portability thesis, live (real clouds).** Deploys the same RGD + ConfigMap onto already-provisioned GKE / AKS clusters (kro + RGD + one ConfigMap — nothing cloud-specific created). |
-| `clouds/` | **Platform-team environment config.** The only place cloud details live — a per-cluster `genaiops-platform-config` ConfigMap KRO reads (via `externalRef`) to resolve the StorageClass, plus that StorageClass. Never the RGD, never an instance. See `clouds/README.md`. |
+| `scripts/deploy-to-cluster.sh` / `deploy-multicloud-real.sh` | **The portability thesis, live (real clouds).** Deploys the same RGDs onto already-provisioned GKE / AKS / EKS clusters via one `ClusterPlatform` instance — 100% KRO, nothing cloud-specific hand-applied. |
+| `clouds/` | **Platform-team environment config.** The only place cloud details live — one `ClusterPlatform` instance per cluster (`platform.yaml`) that KRO expands into the `genaiops-platform-config` ConfigMap and, where needed, the StorageClass. Never the RGD, never an instance. See `clouds/README.md`. |
 | `docs/MULTICLOUD.md` | **Minute-by-minute multi-cloud runbook.** Deploy one spec to "GKE", move it to "AKS", no diff. |
-| `docs/PROVISION-REAL-CLUSTERS.md` | **Morning-of runbook** to provision real GKE + AKS clusters and deploy the platform to both for the live demo. |
+| `docs/PROVISION-REAL-CLUSTERS.md` | **Runbook** to provision real GKE + AKS + EKS (Auto Mode) clusters and deploy the platform to each for the live demo. |
 | `docs/RUNBOOK.md` | **Minute-by-minute stage script.** Read this before presenting. |
 | `docs/kubecon-deck.md` | KubeCon main-session deck (use-case 1), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/kubecon-deck.md -o deck.pptx`. |
 | `docs/maintainers-summit-deck.md` | Maintainers Summit deck (both use-cases), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/maintainers-summit-deck.md -o deck.pptx`. |
@@ -180,36 +181,44 @@ never leaks into the RGD or any instance. Follow `docs/MULTICLOUD.md` for the
 staged walkthrough, and `clouds/README.md` for how to add a third cloud (EKS is
 included as a worked example).
 
-### On real GKE / AKS (the live demo)
+### On real GKE / AKS / EKS — 100% KRO (the live demo)
 
-kind covers CI and local dev; the live demo deploys the **same** RGD and
-instances to **real, already-provisioned GKE and AKS clusters**:
+kind covers CI and local dev; the live demo deploys the **same** RGDs and
+instances to **real, already-provisioned GKE, AKS, and EKS clusters**:
 
 ```bash
-# clusters already provisioned; contexts named gke / aks
-./scripts/deploy-multicloud-real.sh
-kubectl --context gke apply -f instances/sentiment-api.yaml   # binds premium-rwo
-kubectl --context aks apply -f instances/sentiment-api.yaml   # binds managed-csi
+# clusters already provisioned; contexts named gke / aks / eks
+./scripts/deploy-multicloud-real.sh                          # gke + aks
+./scripts/deploy-to-cluster.sh --context eks --cloud eks     # EKS (Auto Mode)
+kubectl --context gke apply -f instances/sentiment-api.yaml  # binds premium-rwo
+kubectl --context aks apply -f instances/sentiment-api.yaml  # binds managed-csi
+kubectl --context eks apply -f instances/sentiment-api.yaml  # binds gp3 (KRO-created)
 ```
 
-Nothing cloud-specific is installed — just kro, the RGD, and the
-`genaiops-platform-config` ConfigMap KRO reads (GKE/AKS already ship the named
-StorageClass). The mock workload image is pulled from GHCR
-(`ghcr.io/danbruno101/mock-vllm:demo`), so no `kind load` is involved.
-`docs/PROVISION-REAL-CLUSTERS.md` is the morning-of runbook for standing the
-clusters up.
+**Nothing is hand-applied but KRO.** Each cluster gets `helm install kro`, the
+RGDs, and one `ClusterPlatform` instance that KRO expands into the platform
+config. Where the cloud ships the class (GKE `premium-rwo`, AKS `managed-csi`) KRO
+**references** it; where it doesn't (**EKS** — even Auto Mode ships only the
+built-in EBS CSI *driver*, no class) KRO **creates** the `gp3` StorageClass itself.
+EKS Auto Mode is the unlock: it removes the one piece KRO couldn't own (the CSI
+addon + IRSA), so all three clouds reach the same 100%-KRO bar. The mock image is
+pulled from GHCR, so no `kind load` is involved. See
+`docs/PROVISION-REAL-CLUSTERS.md`.
 
 ## How portability actually works here
 
 The RGD exposes `mode` (`mock`|`gpu`) as a **schema field** a developer can set,
-and resolves `storageClass` per cluster by reading the platform team's
-`genaiops-platform-config` ConfigMap (a read-only `externalRef`) — with an
-optional `spec.storageClass` developer override on top. Moving from a laptop to
-an EKS, GKE, or AKS GPU node means changing a *value* (the instance's `mode`, or
-the cluster's ConfigMap) — not editing manifests, not re-templating, not forking
-the RGD. CEL conditionals in the RGD (`${schema.spec.mode == "gpu" ? ... : ...}`)
-fold the environment differences into the template once, so developers never see
-them.
+and resolves `storageClass` per cluster by reading the `genaiops-platform-config`
+ConfigMap (a read-only `externalRef`) — with an optional `spec.storageClass`
+developer override on top. That ConfigMap (and, where the cloud ships no class,
+the StorageClass) is itself **owned by KRO**, created from a one-per-cluster
+`ClusterPlatform` instance (`rgd/platform-rgd.yaml`) — so the per-cluster
+environment is KRO's, not a hand-applied manifest. Moving from a laptop to an EKS,
+GKE, or AKS GPU node means changing a *value* (the instance's `mode`, or the
+cluster's `ClusterPlatform`) — not editing manifests, not re-templating, not
+forking the RGD. CEL conditionals in the RGD
+(`${schema.spec.mode == "gpu" ? ... : ...}`) fold the environment differences into
+the template once, so developers never see them.
 
 ## Notes
 
