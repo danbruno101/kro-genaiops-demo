@@ -1,0 +1,23 @@
+# =============================================================================
+# GKE platform config (platform-team owned) — a single KRO-owned object.
+# -----------------------------------------------------------------------------
+# One ClusterPlatform instance replaces the old pair (storageclass.yaml +
+# platform-config.yaml). KRO expands it into the genaiops-platform-config
+# ConfigMap and, here, the `premium-rwo` StorageClass.
+#
+# These are the SIMULATED / kind values: provisioner is kind's built-in
+# `rancher.io/local-path` and manageStorageClass is true so the named class is
+# minted on a laptop. On a REAL GKE cluster `premium-rwo` already ships, so you
+# set manageStorageClass: false (KRO just references it) — see
+# docs/PROVISION-REAL-CLUSTERS.md.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: ClusterPlatform
+metadata:
+  name: cluster-platform
+spec:
+  cloud: gke
+  storageClass: premium-rwo
+  manageStorageClass: true          # real GKE: false (premium-rwo ships)
+  provisioner: rancher.io/local-path  # real GKE: pd.csi.storage.gke.io
+  makeDefault: true

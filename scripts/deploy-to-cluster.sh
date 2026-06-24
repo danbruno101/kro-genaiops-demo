@@ -45,10 +45,21 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1"; exi
 need kubectl; need helm
 
 [ -n "${CTX}" ]   || { echo "Missing --context <kube-context>"; exit 1; }
-[ -n "${CLOUD}" ] || { echo "Missing --cloud <gke|aks>"; exit 1; }
+[ -n "${CLOUD}" ] || { echo "Missing --cloud <gke|aks|eks>"; exit 1; }
 
-CFG="${REPO}/clouds/${CLOUD}/platform-config.yaml"
-[ -f "${CFG}" ] || { echo "No platform config for cloud '${CLOUD}' at ${CFG}"; exit 1; }
+# Per-cloud REAL-cluster ClusterPlatform values. The committed clouds/<cloud>/
+# platform.yaml files hold the kind-SIM values; for real clusters we generate the
+# instance here with the cloud's true provisioner and the ships-vs-creates toggle:
+#   GKE / AKS  -> the named class already ships -> manageStorageClass=false (KRO
+#                references it; creating it would collide).
+#   EKS Auto Mode -> ships NO class, but the EBS CSI driver is built in -> KRO
+#                CREATES gp3 (manageStorageClass=true). 100% KRO, no addon/IRSA.
+case "${CLOUD}" in
+  gke) WANT_SC="premium-rwo"; MANAGE="false"; PROVISIONER="pd.csi.storage.gke.io"; VTYPE=""; ENC="false" ;;
+  aks) WANT_SC="managed-csi"; MANAGE="false"; PROVISIONER="disk.csi.azure.com";   VTYPE=""; ENC="false" ;;
+  eks) WANT_SC="gp3";         MANAGE="true";  PROVISIONER="ebs.csi.eks.amazonaws.com"; VTYPE="gp3"; ENC="true" ;;
+  *)   echo "Unknown --cloud '${CLOUD}' (expected gke|aks|eks)"; exit 1 ;;
+esac
 
 say "[${CLOUD}] Deploying to context '${CTX}'"
 note "Verifying the cluster is reachable"
@@ -67,30 +78,56 @@ helm --kube-context "${CTX}" upgrade --install kro \
   --wait || note "kro may already be installed; continuing."
 kubectl --context "${CTX}" wait --for=condition=Available deploy -n kro --all --timeout=180s || true
 
-note "Applying platform config (the ConfigMap KRO reads to resolve StorageClass)"
-kubectl --context "${CTX}" apply -f "${CFG}"
-WANT_SC="$(kubectl --context "${CTX}" get configmap genaiops-platform-config \
-  -o jsonpath='{.data.storageClass}' 2>/dev/null || true)"
-if [ -n "${WANT_SC}" ]; then
+note "Applying the platform + workload RGDs (identical on every cluster)"
+kubectl --context "${CTX}" apply -f "${REPO}/rgd/platform-rgd.yaml"
+kubectl --context "${CTX}" apply -f "${REPO}/rgd/genaiops-rgd.yaml"
+for i in $(seq 1 30); do
+  kubectl --context "${CTX}" get crd clusterplatforms.kro.run genaiservices.kro.run >/dev/null 2>&1 && break
+  sleep 2
+done
+
+if [ "${MANAGE}" = "true" ]; then
+  note "Applying the ClusterPlatform instance (KRO owns the ConfigMap + StorageClass)"
+else
+  note "Applying the ClusterPlatform instance (KRO owns the ConfigMap; class already ships)"
+fi
+kubectl --context "${CTX}" apply -f - <<EOF
+apiVersion: kro.run/v1alpha1
+kind: ClusterPlatform
+metadata:
+  name: cluster-platform
+spec:
+  cloud: ${CLOUD}
+  storageClass: ${WANT_SC}
+  manageStorageClass: ${MANAGE}
+  provisioner: ${PROVISIONER}
+  volumeType: "${VTYPE}"
+  encrypted: ${ENC}
+  makeDefault: true
+EOF
+for i in $(seq 1 30); do
+  kubectl --context "${CTX}" get configmap genaiops-platform-config >/dev/null 2>&1 && break
+  sleep 2
+done
+
+if [ "${MANAGE}" = "true" ]; then
+  note "manageStorageClass=true -> waiting for KRO to create StorageClass '${WANT_SC}'"
+  for i in $(seq 1 30); do
+    kubectl --context "${CTX}" get storageclass "${WANT_SC}" >/dev/null 2>&1 && { note "KRO created '${WANT_SC}'. ✓"; break; }
+    sleep 2
+  done
+else
   if kubectl --context "${CTX}" get storageclass "${WANT_SC}" >/dev/null 2>&1; then
-    note "StorageClass '${WANT_SC}' is present on this cluster. ✓"
+    note "StorageClass '${WANT_SC}' already ships on this cluster. ✓ (KRO references it)"
   else
-    note "WARNING: StorageClass '${WANT_SC}' not found on '${CTX}'."
-    note "         On managed GKE/AKS it ships by default; if missing, create it"
-    note "         (or edit clouds/${CLOUD}/platform-config.yaml) before deploying a workload."
+    note "WARNING: StorageClass '${WANT_SC}' not found on '${CTX}'. On managed ${CLOUD} it"
+    note "         ships by default; if missing, set manageStorageClass:true for this cloud."
   fi
 fi
 
 note "Deploying Prometheus (shared monitoring infra)"
 kubectl --context "${CTX}" apply -f "${REPO}/monitoring/prometheus.yaml"
 kubectl --context "${CTX}" wait --for=condition=Available deploy/prometheus --timeout=180s || true
-
-note "Applying the SAME GenAIOps RGD (identical on every cluster)"
-kubectl --context "${CTX}" apply -f "${REPO}/rgd/genaiops-rgd.yaml"
-for i in $(seq 1 30); do
-  kubectl --context "${CTX}" get crd genaiservices.kro.run >/dev/null 2>&1 && break
-  sleep 2
-done
 
 say "Ready on '${CTX}'. Deploy the unchanged developer spec with:"
 cat <<EOF
