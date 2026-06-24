@@ -55,15 +55,16 @@ spec:
   # name (${schema.spec.name}-cache); kro creates both concurrently, the Pod gets
   # scheduled, and that triggers the PVC to bind. No manual ordering, no deadlock.
   resources:
-    # 0) Platform config (READ-ONLY external reference, owned by the platform
-    #    team, one per cluster -- see clouds/<cloud>/platform-config.yaml).
-    #    kro READS this ConfigMap and never creates/owns it. It is how KRO --
-    #    not the Kubernetes default-StorageClass mechanism -- resolves the
-    #    per-cluster storage choice: the SAME RGD and the SAME instance apply on
-    #    every cloud, and this object supplies the environment-specific value.
-    #    The ConfigMap must exist before a GenAIService reconciles (setup.sh and
-    #    setup-multicloud.sh apply it); an empty storageClass value means
-    #    "inherit the cluster default."
+    # 0) Platform config (READ-ONLY external reference, one per cluster). It is
+    #    created by KRO from a ClusterPlatform instance (rgd/platform-rgd.yaml +
+    #    clouds/<cloud>/platform.yaml) -- THIS RGD only READS it and never
+    #    creates/owns it. It is how KRO -- not the Kubernetes default-StorageClass
+    #    mechanism -- resolves the per-cluster storage choice: the SAME RGD and the
+    #    SAME instance apply on every cloud, and this object supplies the
+    #    environment-specific value. The ConfigMap must exist before a GenAIService
+    #    reconciles (the setup/deploy scripts apply the ClusterPlatform instance
+    #    first and wait for it); an empty storageClass value means "inherit the
+    #    cluster default."
     - id: platformConfig
       externalRef:
         apiVersion: v1

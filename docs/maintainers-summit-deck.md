@@ -94,10 +94,13 @@ The **only** things that change between clouds are field **values** — not the 
 
 **One ResourceGraphDefinition + one 10-line GenAIService — authored once, applied unchanged everywhere.**
 
+**And it's 100% KRO on every cloud:** a one-per-cluster `ClusterPlatform` instance is KRO-owned, so KRO references the shipped class on GKE/AKS and *creates* it on EKS (Auto Mode bakes in the EBS CSI driver — the one piece KRO couldn't own). Nothing is hand-applied but KRO.
+
 <!--
 RUNBOOK Beat 4 (the thesis). Source: instances/catalog.yaml — five teams behind
 one template. Move laptop -> hyperscaler by changing values in the 10-line file;
-no re-templating, no fork of the RGD.
+no re-templating, no fork of the RGD. The "only thing applied is KRO" line + EKS
+Auto Mode is the SIG Cloud Provider hook.
 -->
 
 ---

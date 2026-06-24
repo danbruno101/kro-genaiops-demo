@@ -1,0 +1,21 @@
+# =============================================================================
+# AKS platform config (platform-team owned) — a single KRO-owned object.
+# -----------------------------------------------------------------------------
+# One ClusterPlatform instance replaces the old pair (storageclass.yaml +
+# platform-config.yaml). KRO expands it into the genaiops-platform-config
+# ConfigMap and, here, the `managed-csi` StorageClass.
+#
+# SIMULATED / kind values: provisioner `rancher.io/local-path`, manageStorageClass
+# true. On a REAL AKS cluster `managed-csi` already ships, so set
+# manageStorageClass: false (KRO references it) — see docs/PROVISION-REAL-CLUSTERS.md.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: ClusterPlatform
+metadata:
+  name: cluster-platform
+spec:
+  cloud: aks
+  storageClass: managed-csi
+  manageStorageClass: true          # real AKS: false (managed-csi ships)
+  provisioner: rancher.io/local-path  # real AKS: disk.csi.azure.com
+  makeDefault: true

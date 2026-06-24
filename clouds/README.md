@@ -37,21 +37,31 @@ cloud they were on.
 
 ## What's in each folder
 
-`storageclass.yaml` — a StorageClass named exactly what the real cloud calls
-its default block storage (`premium-rwo` on GKE, `managed-csi` on AKS, `gp3`
-on EKS). In this *simulated* demo the provisioner is kind's built-in
-`rancher.io/local-path` so it runs GPU- and cloud-free; on a real cluster you'd
-swap the provisioner for the cloud's CSI driver and the rest of the demo is
-unchanged. (`clouds/kind/` has none — kind already ships `standard`.)
+`platform.yaml` — a single **`ClusterPlatform`** instance (the API defined by
+`rgd/platform-rgd.yaml`). KRO expands it into the per-cluster environment config,
+so the StorageClass and the ConfigMap are **KRO-owned**, not hand-applied. It
+carries:
 
-`platform-config.yaml` — the `genaiops-platform-config` ConfigMap KRO reads via
-`externalRef`. Its `storageClass` value is what every GenAIService on that
-cluster uses. This is the object that actually drives KRO's per-cluster
-resolution; `storageclass.yaml` just makes sure the class it names exists.
+- `storageClass` — the class name GenAI workloads use here (`premium-rwo` on GKE,
+  `managed-csi` on AKS, `gp3` on EKS). Written into the `genaiops-platform-config`
+  ConfigMap that the GenAIService RGD reads via `externalRef`.
+- `manageStorageClass` — **the cross-cloud toggle.** `false` where the cloud
+  already ships the class (real GKE/AKS) so KRO just *references* it (creating it
+  would collide); `true` where it doesn't (EKS — even Auto Mode ships no class, only
+  the built-in CSI driver) so KRO *creates* it. A StorageClass is a plain K8s
+  object, so KRO can own it.
+- `provisioner` / `volumeType` / `encrypted` — used only when KRO creates the
+  class. The committed files use kind's `rancher.io/local-path` so the *simulated*
+  demo runs cloud-free; real provisioners (`pd.csi.storage.gke.io`,
+  `disk.csi.azure.com`, `ebs.csi.eks.amazonaws.com`) are applied by
+  `scripts/deploy-to-cluster.sh` / documented in `docs/PROVISION-REAL-CLUSTERS.md`.
+
+Net: the **only** thing applied to a cluster is KRO — kro itself, the RGDs, this
+one `ClusterPlatform` instance, and the developer instances. 100% KRO.
 
 ## Adding a cloud
 
-Drop in `clouds/<newcloud>/{storageclass,platform-config}.yaml` and point
-`setup-multicloud.sh` at it. No change to the RGD, no change to any instance.
-That's the whole point. `clouds/eks/` is included as a worked example even
-though the demo only spins up the GKE and AKS clusters.
+Drop in `clouds/<newcloud>/platform.yaml` (one `ClusterPlatform` instance) and
+point `setup-multicloud.sh` at it. No change to the RGD, no change to any instance.
+That's the whole point. `clouds/eks/` is included as a worked example even though
+the local demo only spins up the GKE and AKS sims.

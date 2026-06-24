@@ -50,9 +50,9 @@ docker build -t ghcr.io/danbruno101/mock-vllm:demo "${REPO}/monitoring/mock-vllm
 provision() {
   local cluster="$1" cloud="$2" region="$3"
   local ctx="kind-${cluster}"
-  local scfile="${REPO}/clouds/${cloud}/storageclass.yaml"
+  local platformfile="${REPO}/clouds/${cloud}/platform.yaml"
 
-  [ -f "${scfile}" ] || { echo "No platform config for cloud '${cloud}' at ${scfile}"; exit 1; }
+  [ -f "${platformfile}" ] || { echo "No platform config for cloud '${cloud}' at ${platformfile}"; exit 1; }
 
   say "[${cloud}] Cluster '${cluster}' (region ${region})"
 
@@ -78,26 +78,36 @@ provision() {
   note "Loading the mock-vllm image into the cluster"
   kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name "${cluster}" >/dev/null
 
-  note "Applying PLATFORM-TEAM environment config: clouds/${cloud}/"
-  # Demote kind's built-in 'standard' so the cloud-named class is the sole default.
+  note "Demoting kind's built-in 'standard' so the cloud-named class is the sole default"
+  # Sim scaffolding only (real GKE/AKS have no kind 'standard'); PVCs name the
+  # class explicitly via the ConfigMap, so this is cosmetic for `kubectl get sc`.
   if kubectl --context "${ctx}" get storageclass standard >/dev/null 2>&1; then
     kubectl --context "${ctx}" patch storageclass standard \
       -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' >/dev/null
   fi
-  kubectl --context "${ctx}" apply -f "${scfile}" >/dev/null
-  # The ConfigMap KRO reads (externalRef) to resolve this cluster's StorageClass.
-  kubectl --context "${ctx}" apply -f "${REPO}/clouds/${cloud}/platform-config.yaml" >/dev/null
+
+  note "Applying the SAME platform + workload RGDs (identical on every cloud)"
+  # ClusterPlatform: KRO owns this cluster's StorageClass + ConfigMap.
+  # GenAIService: reads that ConfigMap via externalRef.
+  kubectl --context "${ctx}" apply -f "${REPO}/rgd/platform-rgd.yaml" >/dev/null
+  kubectl --context "${ctx}" apply -f "${REPO}/rgd/genaiops-rgd.yaml" >/dev/null
+  for i in $(seq 1 30); do
+    kubectl --context "${ctx}" get crd clusterplatforms.kro.run genaiservices.kro.run >/dev/null 2>&1 && break
+    sleep 2
+  done
+
+  note "Applying PLATFORM-TEAM config: clouds/${cloud}/platform.yaml (KRO mints the class + ConfigMap)"
+  kubectl --context "${ctx}" apply -f "${platformfile}" >/dev/null
+  # Wait for KRO to create the ConfigMap (externalRef) and the named StorageClass
+  # before any GenAIService reconciles.
+  for i in $(seq 1 30); do
+    kubectl --context "${ctx}" get configmap genaiops-platform-config >/dev/null 2>&1 && break
+    sleep 2
+  done
 
   note "Deploying Prometheus (monitoring beat)"
   kubectl --context "${ctx}" apply -f "${REPO}/monitoring/prometheus.yaml" >/dev/null
   kubectl --context "${ctx}" wait --for=condition=Available deploy/prometheus --timeout=120s || true
-
-  note "Applying the SAME GenAIOps RGD (identical on every cloud)"
-  kubectl --context "${ctx}" apply -f "${REPO}/rgd/genaiops-rgd.yaml" >/dev/null
-  for i in $(seq 1 30); do
-    kubectl --context "${ctx}" get crd genaiservices.kro.run >/dev/null 2>&1 && break
-    sleep 2
-  done
 
   note "Default StorageClass on ${ctx}:"
   kubectl --context "${ctx}" get storageclass \

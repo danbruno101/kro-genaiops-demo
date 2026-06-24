@@ -62,29 +62,39 @@ jobs:
           docker build -t ghcr.io/danbruno101/mock-vllm:demo monitoring/mock-vllm
           kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name "${CLUSTER}"
 
-      - name: Apply the ResourceGraphDefinition
+      - name: Apply the platform + workload RGDs
         run: |
+          kubectl apply -f rgd/platform-rgd.yaml
           kubectl apply -f rgd/genaiops-rgd.yaml
           kubectl get rgd
 
-      - name: Apply platform config (the externalRef the RGD reads)
-        run: |
-          # The RGD resolves the per-cluster StorageClass by reading this
-          # ConfigMap (externalRef). Empty value -> inherit the cluster default,
-          # which is exactly the base demo's behavior; this step proves the
-          # externalRef + includeWhen path works on the pinned kro release.
-          kubectl apply -f clouds/kind/platform-config.yaml
-
-      - name: Wait for the generated GenAIService CRD to register
+      - name: Wait for the generated CRDs to register
         run: |
           for i in $(seq 1 30); do
-            if kubectl get crd genaiservices.kro.run >/dev/null 2>&1; then
-              echo "GenAIService API is live."; exit 0
+            if kubectl get crd clusterplatforms.kro.run genaiservices.kro.run >/dev/null 2>&1; then
+              echo "ClusterPlatform + GenAIService APIs are live."; exit 0
             fi
-            echo "waiting for CRD... ($i)"; sleep 4
+            echo "waiting for CRDs... ($i)"; sleep 4
           done
-          echo "::error::GenAIService CRD never registered"
-          kubectl describe rgd genaiservice.kro.run || true
+          echo "::error::CRDs never registered"
+          kubectl describe rgd clusterplatform.kro.run genaiservice.kro.run || true
+          exit 1
+
+      - name: Apply platform config via KRO (ClusterPlatform owns the externalRef)
+        run: |
+          # The genaiops-platform-config ConfigMap the GenAIService RGD reads
+          # (externalRef) is now created BY KRO from a ClusterPlatform instance --
+          # not hand-applied. clouds/kind has manageStorageClass:false (empty class
+          # -> inherit kind's default), proving the externalRef path works when the
+          # ConfigMap itself is KRO-owned. Wait for KRO to create it.
+          kubectl apply -f clouds/kind/platform.yaml
+          for i in $(seq 1 30); do
+            kubectl get configmap genaiops-platform-config >/dev/null 2>&1 && { echo "ConfigMap created by KRO."; exit 0; }
+            echo "waiting for KRO to create the ConfigMap... ($i)"; sleep 4
+          done
+          echo "::error::ClusterPlatform never created the ConfigMap"
+          kubectl describe clusterplatform cluster-platform || true
+          kubectl logs -n kro deploy/kro --tail=120 || true
           exit 1
 
       - name: Apply a GenAIService instance
@@ -335,14 +345,14 @@ jobs:
           kubectl logs -n kro deploy/kro --tail=100 || true
 
   # ===========================================================================
-  # Multi-cloud storage resolution: proves KRO itself resolves the per-cluster
-  # StorageClass by READING the platform-team ConfigMap (externalRef) and folding
-  # its value into the PVC -- the same unchanged RGD and instance, the value
-  # supplied entirely by the cluster-local ConfigMap. We use `standard` (the only
-  # StorageClass a kind cluster ships) so the value is non-empty AND bindable,
-  # which is the exact mechanism a real GKE/AKS cluster uses with premium-rwo /
-  # managed-csi. This is the validation that the externalRef path works on the
-  # pinned kro release.
+  # KRO-owned StorageClass (simulates EKS Auto Mode): proves the StorageClass and
+  # the platform ConfigMap are created BY KRO (a ClusterPlatform instance with
+  # manageStorageClass:true), not hand-applied -- then that an unchanged
+  # GenAIService instance has its PVC bound to that KRO-created class via the
+  # externalRef the workload RGD reads. This is the exact path a real EKS Auto
+  # Mode cluster uses (no default class ships, EBS CSI driver built in, KRO mints
+  # gp3); kind's local-path provisioner stands in so it binds in CI. End-to-end,
+  # nothing is hand-applied but KRO objects.
   # ===========================================================================
   storageclass-resolution:
     runs-on: ubuntu-latest
@@ -376,25 +386,54 @@ jobs:
           docker build -t ghcr.io/danbruno101/mock-vllm:demo monitoring/mock-vllm
           kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name "${CLUSTER}"
 
-      - name: Apply the RGD and a platform config naming a StorageClass
+      - name: Apply the platform + workload RGDs
         run: |
+          kubectl apply -f rgd/platform-rgd.yaml
           kubectl apply -f rgd/genaiops-rgd.yaml
           for i in $(seq 1 30); do
-            kubectl get crd genaiservices.kro.run >/dev/null 2>&1 && break
-            echo "waiting for CRD... ($i)"; sleep 4
+            kubectl get crd clusterplatforms.kro.run genaiservices.kro.run >/dev/null 2>&1 && break
+            echo "waiting for CRDs... ($i)"; sleep 4
           done
-          # Platform team's per-cluster choice. On real clouds this is premium-rwo
-          # / managed-csi; in CI we use kind's `standard` so the PVC can bind.
-          kubectl create configmap genaiops-platform-config \
-            --from-literal=storageClass=standard
+
+      - name: KRO creates the StorageClass (simulates EKS Auto Mode)
+        run: |
+          # clouds/eks/platform.yaml has manageStorageClass:true -> KRO MINTS the
+          # gp3 class itself, exactly as on a real EKS Auto Mode cluster (no default
+          # class ships, but the EBS CSI driver is built in). It uses kind's
+          # rancher.io/local-path provisioner so the class actually binds in CI.
+          # This is the proof the StorageClass is KRO-OWNED, not hand-applied.
+          kubectl apply -f clouds/eks/platform.yaml
+
+      - name: Assert KRO created BOTH the StorageClass and the ConfigMap
+        run: |
+          set -e
+          echo "Waiting for KRO to create the gp3 StorageClass..."
+          for i in $(seq 1 30); do
+            kubectl get storageclass gp3 >/dev/null 2>&1 && break
+            echo "waiting for StorageClass... ($i)"; sleep 4
+          done
+          kubectl get storageclass gp3
+          prov="$(kubectl get storageclass gp3 -o jsonpath='{.provisioner}')"
+          test "${prov}" = "rancher.io/local-path"
+          echo "OK: KRO created StorageClass gp3 (provisioner ${prov})."
+
+          echo "Waiting for KRO to create the platform ConfigMap..."
+          for i in $(seq 1 30); do
+            kubectl get configmap genaiops-platform-config >/dev/null 2>&1 && break
+            sleep 4
+          done
+          val="$(kubectl get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}')"
+          test "${val}" = "gp3"
+          echo "OK: KRO created the ConfigMap naming gp3."
 
       - name: Apply an UNCHANGED instance (no storageClass field)
         run: |
-          # instances/sentiment-api.yaml never names a StorageClass. If KRO read
-          # the ConfigMap, the PVC must come out with storageClassName=standard.
+          # instances/sentiment-api.yaml never names a StorageClass. KRO reads the
+          # KRO-created ConfigMap, so the PVC must come out storageClassName=gp3 --
+          # the very class KRO itself created. End-to-end, 100% KRO.
           kubectl apply -f instances/sentiment-api.yaml
 
-      - name: Assert KRO folded the ConfigMap value into the PVC
+      - name: Assert the PVC binds to the KRO-created class and serves
         run: |
           set -e
           echo "Waiting for KRO to create the PVC..."
@@ -404,8 +443,8 @@ jobs:
           done
           scn="$(kubectl get pvc sentiment-api-cache -o jsonpath='{.spec.storageClassName}')"
           echo "PVC storageClassName resolved to: '${scn}'"
-          test "${scn}" = "standard"
-          echo "OK: KRO resolved the StorageClass from the platform ConfigMap."
+          test "${scn}" = "gp3"
+          echo "OK: KRO resolved the StorageClass it created from the ConfigMap it created."
 
           echo "And it actually binds + serves (Deployment becomes Available)..."
           for i in $(seq 1 45); do
@@ -413,14 +452,16 @@ jobs:
             sleep 4
           done
           kubectl wait --for=condition=Available deploy/sentiment-api --timeout=180s
-          echo "OK: end-to-end ConfigMap -> PVC -> bound -> serving."
+          echo "OK: KRO-owned StorageClass -> ConfigMap -> PVC -> bound -> serving."
 
       - name: Diagnostics on failure
         if: failure()
         run: |
           kubectl get all -A || true
+          kubectl get storageclass -o yaml || true
+          kubectl get clusterplatform -o yaml || true
           kubectl get pvc -o yaml || true
           kubectl get configmap genaiops-platform-config -o yaml || true
-          kubectl describe rgd genaiservice.kro.run || true
+          kubectl describe rgd clusterplatform.kro.run genaiservice.kro.run || true
           kubectl get genaiservice -o yaml || true
           kubectl logs -n kro deploy/kro --tail=120 || true

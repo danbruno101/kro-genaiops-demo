@@ -91,8 +91,12 @@ The **only** things that change between clouds are field **values** (`mode`, `st
 
 Move from laptop to any hyperscaler by changing values in the 10-line file — **no re-templating, no fork of the RGD**.
 
+**100% KRO, all three clouds.** A one-per-cluster `ClusterPlatform` is KRO-owned too: where the cloud ships the class (GKE/AKS) KRO references it; where it doesn't (**EKS**) KRO creates it. EKS **Auto Mode** bakes in the EBS CSI driver — the one piece KRO couldn't own — so EKS joins GKE/AKS at the same bar. Nothing is hand-applied but KRO.
+
 <!--
 Slide 3 (the thesis). RUNBOOK Beat 4 + instances/catalog.yaml. In the live demo
-this runs on real GKE + AKS clusters (docs/PROVISION-REAL-CLUSTERS.md); KRO resolves
-each cluster's storageClass from a platform-owned ConfigMap it reads. Close here.
+this runs on real GKE + AKS + EKS (docs/PROVISION-REAL-CLUSTERS.md); KRO resolves
+each cluster's storageClass from a platform ConfigMap it OWNS, and creates the
+StorageClass itself on EKS Auto Mode. "The only thing applied is KRO" is the SIG
+Cloud Provider hook — land it. Close here.
 -->
