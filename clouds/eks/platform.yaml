@@ -1,0 +1,30 @@
+# =============================================================================
+# EKS platform config (platform-team owned) — a single KRO-owned object.
+# -----------------------------------------------------------------------------
+# One ClusterPlatform instance replaces the old pair (storageclass.yaml +
+# platform-config.yaml). KRO expands it into the genaiops-platform-config
+# ConfigMap and the `gp3` StorageClass.
+#
+# EKS is the cloud that makes the "100% KRO" point: it ships NO default class,
+# and EKS Auto Mode provides the built-in EBS CSI *driver* but still not a class.
+# A StorageClass is a plain K8s object, so KRO CREATES it (manageStorageClass:
+# true) — no addon, no IRSA, nothing applied by hand.
+#
+# SIMULATED / kind values below (provisioner `rancher.io/local-path`). On a REAL
+# EKS Auto Mode cluster, keep manageStorageClass: true and set:
+#   provisioner: ebs.csi.eks.amazonaws.com
+#   volumeType: gp3
+#   encrypted: true
+# See docs/PROVISION-REAL-CLUSTERS.md.
+# =============================================================================
+apiVersion: kro.run/v1alpha1
+kind: ClusterPlatform
+metadata:
+  name: cluster-platform
+spec:
+  cloud: eks
+  storageClass: gp3
+  manageStorageClass: true            # EKS ships no class -> KRO creates it
+  provisioner: rancher.io/local-path  # real EKS Auto Mode: ebs.csi.eks.amazonaws.com
+  # real EKS Auto Mode also sets:  volumeType: gp3   encrypted: true
+  makeDefault: true

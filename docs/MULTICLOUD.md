@@ -12,11 +12,13 @@ This walkthrough simulates **two clouds with two local `kind` clusters**:
 | `kind-genaiops-aks` | AKS | `managed-csi` |
 
 The *only* thing that makes one cluster "GKE" and the other "AKS" is the
-platform-team config in `clouds/<cloud>/`: a StorageClass plus a
-`genaiops-platform-config` ConfigMap. The RGD reads that ConfigMap (a read-only
-`externalRef`) and folds its `storageClass` into each workload's PVC — so **KRO**
-does the per-cluster resolution. The `ResourceGraphDefinition` is byte-identical
-on both clusters. The product instance is byte-identical on both.
+platform-team config in `clouds/<cloud>/platform.yaml`: a single `ClusterPlatform`
+instance that **KRO** expands into that cluster's StorageClass *and* its
+`genaiops-platform-config` ConfigMap. The GenAIService RGD reads that ConfigMap (a
+read-only `externalRef`) and folds its `storageClass` into each workload's PVC — so
+KRO does the per-cluster resolution, and KRO owns the config it resolves from. Both
+`ResourceGraphDefinition`s are byte-identical on both clusters. The product instance
+is byte-identical on both.
 
 > Everything runs GPU-free on a laptop. On real GKE/AKS clusters the only change
 > is the StorageClass provisioner (CSI driver); see `clouds/README.md`.
@@ -169,9 +171,10 @@ Open these three, in order:
 1. `instances/sentiment-api.yaml` — the product team. No cloud anywhere.
 2. `rgd/genaiops-rgd.yaml` — the platform contract. No cloud-specific *values*;
    it just *reads* the platform ConfigMap (`externalRef`) and resolves the class.
-3. `clouds/gke/` vs `clouds/aks/` — **the only files that know about a cloud**
-   (the `platform-config` ConfigMap + its StorageClass), and they belong to the
-   platform team.
+3. `clouds/gke/platform.yaml` vs `clouds/aks/platform.yaml` — **the only files
+   that know about a cloud**: one `ClusterPlatform` instance each, which KRO
+   expands into that cluster's ConfigMap + StorageClass. They belong to the
+   platform team — and they're KRO objects too, so nothing is hand-applied.
 
 > "Environment detail didn't get pushed up to developers or baked into the
 > template. It's isolated to one folder the platform team owns, and KRO reads it.
@@ -192,10 +195,12 @@ Open these three, in order:
   `volumeBindingMode: WaitForFirstConsumer`. Check the Deployment came up:
   `kubectl --context kind-genaiops-gke get deploy -l app=sentiment-api`.
 - **Wrong StorageClass on the PVC / GenAIService not reconciling:** the RGD's
-  `externalRef` needs the ConfigMap to exist. Re-apply the platform config —
-  `kubectl --context kind-genaiops-gke apply -f clouds/gke/platform-config.yaml -f clouds/gke/storageclass.yaml`
-  and check the value KRO will read:
-  `kubectl --context kind-genaiops-gke get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}{"\n"}'`.
+  `externalRef` needs the ConfigMap to exist, which KRO creates from the
+  `ClusterPlatform` instance. Re-apply it —
+  `kubectl --context kind-genaiops-gke apply -f clouds/gke/platform.yaml` — and
+  check the value KRO will read:
+  `kubectl --context kind-genaiops-gke get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}{"\n"}'`
+  (and `kubectl --context kind-genaiops-gke get clusterplatform` to confirm it reconciled).
 - **`ImagePullBackOff`:** the mock image didn't load. Re-run
   `kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name genaiops-gke`.
 - **Total fallback:** this runbook narrates the whole flow without a live
