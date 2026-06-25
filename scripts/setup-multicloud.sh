@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# setup-multicloud.sh — stand up TWO local clusters that stand in for two
+# setup-multicloud.sh — stand up THREE local clusters that stand in for three
 # different clouds, and prove the portability thesis live:
 #
 #   "Product teams ship one spec and don't care where it runs. The platform
 #    team moves the workload to any cluster on any cloud, and it just works."
 #
-# We simulate the two clouds with two kind clusters. The ONLY thing that makes
-# one a "GKE" cluster and the other an "AKS" cluster is platform-team config in
-# clouds/<cloud>/ — chiefly each cluster's DEFAULT StorageClass (premium-rwo vs
-# managed-csi). The RGD is identical on both. The product instance is identical
-# on both. Nothing about the cloud leaks into either.
+# We simulate GKE / AKS / EKS with three kind clusters. The ONLY thing that makes
+# one a "GKE", "AKS", or "EKS" cluster is platform-team config in
+# clouds/<cloud>/platform.yaml — one ClusterPlatform instance KRO expands into the
+# StorageClass (premium-rwo / managed-csi / gp3) and the platform ConfigMap. On the
+# EKS sim KRO CREATES the class (real EKS ships none; Auto Mode provides the CSI
+# driver). The RGDs are identical on all three. The product instance is identical
+# on all three. Nothing about the cloud leaks into any of them.
 #
 # Idempotent: safe to re-run. Needs: docker, kind, kubectl, helm.
 #
@@ -28,6 +30,7 @@ REPO="${HERE}/.."
 CLUSTERS=(
   "genaiops-gke gke us-central1"
   "genaiops-aks aks eastus"
+  "genaiops-eks eks us-east-1"
 )
 
 say()  { printf "\n\033[1;36m▶ %s\033[0m\n" "$*"; }
@@ -36,7 +39,7 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1"; exi
 
 need docker; need kind; need kubectl; need helm
 
-# Resolve the kro release once, up front, so both clusters install the same one.
+# Resolve the kro release once, up front, so every cluster installs the same one.
 if [ -z "${KRO_VERSION}" ]; then
   KRO_VERSION="$(curl -sL https://api.github.com/repos/kubernetes-sigs/kro/releases/latest \
     | grep -m1 '"tag_name"' | sed -E 's/.*"v?([^"]+)".*/\1/')"
@@ -120,20 +123,25 @@ for entry in "${CLUSTERS[@]}"; do
   provision ${entry}
 done
 
-say "Two clouds are live. Contexts:"
-kubectl config get-contexts -o name | grep -E 'kind-genaiops-(gke|aks)' | sed 's/^/  /'
+say "Three clouds are live. Contexts:"
+kubectl config get-contexts -o name | grep -E 'kind-genaiops-(gke|aks|eks)' | sed 's/^/  /'
 
 cat <<'EOF'
 
-The platform is ready on BOTH clusters. Now show the thesis:
+The platform is ready on ALL THREE clusters. Now show the thesis:
 
   # Product team ships ONE spec — it never names a cloud or a StorageClass.
   kubectl --context kind-genaiops-gke apply -f instances/sentiment-api.yaml
   kubectl --context kind-genaiops-gke get pvc sentiment-api-cache   # bound to premium-rwo
 
-  # Platform team MOVES the same workload to the other cloud. Same file. No diff.
+  # Platform team MOVES the same workload to another cloud. Same file. No diff.
   kubectl --context kind-genaiops-aks apply -f instances/sentiment-api.yaml
   kubectl --context kind-genaiops-aks get pvc sentiment-api-cache   # bound to managed-csi
+
+  # And EKS — where KRO CREATED the gp3 class itself (EKS ships none; Auto Mode
+  # provides the CSI driver). Same file again, no diff.
+  kubectl --context kind-genaiops-eks apply -f instances/sentiment-api.yaml
+  kubectl --context kind-genaiops-eks get pvc sentiment-api-cache   # bound to gp3 (KRO-created)
 
 Full walkthrough: docs/MULTICLOUD.md     Tear down: ./scripts/teardown-multicloud.sh
 EOF
