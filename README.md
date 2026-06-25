@@ -191,8 +191,7 @@ instances to **real, already-provisioned GKE, AKS, and EKS clusters**:
 
 ```bash
 # clusters already provisioned; contexts named gke / aks / eks
-./scripts/deploy-multicloud-real.sh                          # gke + aks
-./scripts/deploy-to-cluster.sh --context eks --cloud eks     # EKS (Auto Mode)
+./scripts/deploy-multicloud-real.sh                          # gke + aks + eks (skips any absent context)
 kubectl --context gke apply -f instances/sentiment-api.yaml  # binds premium-rwo
 kubectl --context aks apply -f instances/sentiment-api.yaml  # binds managed-csi
 kubectl --context eks apply -f instances/sentiment-api.yaml  # binds gp3 (KRO-created)

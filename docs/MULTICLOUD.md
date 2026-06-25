@@ -34,8 +34,8 @@ instance is byte-identical on all three.
 > are the local/CI flow. For the real-cloud live demo, provision GKE + AKS + EKS
 > (Auto Mode) per `docs/PROVISION-REAL-CLUSTERS.md` (which names the contexts
 > **`gke`**, **`aks`**, **`eks`**) and run `./scripts/deploy-multicloud-real.sh`
-> (gke + aks) plus `./scripts/deploy-to-cluster.sh --context eks --cloud eks`.
-> Every beat after that is identical — just use the real contexts in place of the
+> (it deploys to all three, skipping any context you didn't provision). Every beat
+> after that is identical — just use the real contexts in place of the
 > `kind-genaiops-*` ones.
 
 ---

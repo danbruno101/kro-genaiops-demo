@@ -100,22 +100,20 @@ kubectl config rename-context "$(kubectl config current-context)" eks
 
 ---
 
-## 4. Deploy the platform to each (pure-KRO footprint)
+## 4. Deploy the platform to all three (pure-KRO footprint)
 
-GKE + AKS in one shot:
 ```bash
-./scripts/deploy-multicloud-real.sh           # contexts gke, aks
+./scripts/deploy-multicloud-real.sh           # contexts gke, aks, eks
 ```
 
-EKS (Auto Mode → KRO creates the class):
-```bash
-./scripts/deploy-to-cluster.sh --context eks --cloud eks
-```
-
-Each call installs kro, applies the platform + workload RGDs, then applies a
-`ClusterPlatform` instance: on GKE/AKS it owns the ConfigMap and references the
+This deploys to each of the `gke` / `aks` / `eks` contexts (any context that isn't
+in your kubeconfig is skipped with a note, so it also works if you only stood up a
+subset). Each call installs kro, applies the platform + workload RGDs, then applies
+a `ClusterPlatform` instance: on GKE/AKS it owns the ConfigMap and references the
 shipped class; on EKS it also **creates** the `gp3` class. No image loading (pods
 pull from GHCR), nothing `kubectl`-applied but KRO objects.
+
+> Deploy a single cloud instead: `./scripts/deploy-to-cluster.sh --context eks --cloud eks`.
 
 ---
 
