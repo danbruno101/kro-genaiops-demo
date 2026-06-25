@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# teardown-multicloud.sh — delete both simulated-cloud clusters cleanly.
+# teardown-multicloud.sh — delete the simulated-cloud clusters cleanly.
 set -euo pipefail
 
-CLUSTERS=("genaiops-gke" "genaiops-aks")
+CLUSTERS=("genaiops-gke" "genaiops-aks" "genaiops-eks")
 
 for c in "${CLUSTERS[@]}"; do
   if kind get clusters 2>/dev/null | grep -qx "${c}"; then
