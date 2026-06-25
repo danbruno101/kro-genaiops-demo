@@ -85,22 +85,42 @@ Services, and wired Prometheus — in dependency order I never specified."
 
 The **only** things that change between clouds are field **values** — not the YAML shape, not the RGD.
 
-| Profile | mode | storageClass |
-|---|---|---|
-| **kind** — laptop · CPU | `mock` | *(default)* |
-| **Amazon EKS** — GPU nodes | `gpu` | `gp3` |
-| **Google GKE** — GPU nodes | `gpu` | `premium-rwo` |
-| **Azure AKS** — GPU nodes | `gpu` | `managed-csi` |
+| Cloud | mode | storageClass | Who provides the class? |
+|---|---|---|---|
+| **kind** — laptop · CPU | `mock` | *(default)* | kind ships `standard` |
+| **Google GKE** — GPU | `gpu` | `premium-rwo` | cloud ships it → KRO **references** |
+| **Azure AKS** — GPU | `gpu` | `managed-csi` | cloud ships it → KRO **references** |
+| **Amazon EKS** — GPU | `gpu` | `gp3` | none ships → KRO **creates** it ⟵ |
 
 **One ResourceGraphDefinition + one 10-line GenAIService — authored once, applied unchanged everywhere.**
 
-**And it's 100% KRO on every cloud:** a one-per-cluster `ClusterPlatform` instance is KRO-owned, so KRO references the shipped class on GKE/AKS and *creates* it on EKS (Auto Mode bakes in the EBS CSI driver — the one piece KRO couldn't own). Nothing is hand-applied but KRO.
-
 <!--
 RUNBOOK Beat 4 (the thesis). Source: instances/catalog.yaml — five teams behind
-one template. Move laptop -> hyperscaler by changing values in the 10-line file;
-no re-templating, no fork of the RGD. The "only thing applied is KRO" line + EKS
-Auto Mode is the SIG Cloud Provider hook.
+one template. The 4th column flags EKS as the special case; the next slide is the
+payoff. Point at the EKS row and turn the page.
+-->
+
+---
+
+# EKS Auto Mode — same bar, no default class
+
+EKS ships **no default StorageClass** — yet it's still **100% KRO**:
+
+| | **GKE** | **AKS** | **EKS · Auto Mode** |
+|---|:---:|:---:|:---:|
+| Default class ships? | ✅ `premium-rwo` | ✅ `managed-csi` | ❌ none |
+| CSI driver | built in | built in | **built in (Auto Mode)** |
+| The StorageClass | KRO *references* | KRO *references* | **KRO *creates* `gp3`** |
+| Applied to the cluster | only KRO | only KRO | **only KRO** |
+
+> Auto Mode bundles the EBS CSI driver — the one piece KRO couldn't own. A StorageClass is just a Kubernetes object, so KRO owns that too: `manageStorageClass: true`.
+
+**Same developer YAML. Same RGD. GKE, AKS, and EKS — nothing applied but KRO.**
+
+<!--
+The SIG Cloud Provider payoff, shared with the main-session deck. EKS used to need
+an out-of-band step (EBS CSI addon + IAM + create the class); Auto Mode removes
+exactly that, so KRO owns the whole footprint on all three. CI proves it on kind.
 -->
 
 ---
