@@ -4,66 +4,89 @@
 runs. The platform team moves the workload to any cluster on any cloud, and it
 just works — same RGD, same instance, zero diff.*
 
-This walkthrough simulates **two clouds with two local `kind` clusters**:
+This walkthrough simulates **three clouds with three local `kind` clusters**:
 
-| Context | Plays the role of | StorageClass KRO resolves (from `clouds/<cloud>/`) |
-|---------|-------------------|----------------------------------------------------|
-| `kind-genaiops-gke` | GKE | `premium-rwo` |
-| `kind-genaiops-aks` | AKS | `managed-csi` |
+| Context | Plays the role of | StorageClass KRO resolves | Who creates the class |
+|---------|-------------------|---------------------------|-----------------------|
+| `kind-genaiops-gke` | GKE | `premium-rwo` | KRO (real GKE: ships it) |
+| `kind-genaiops-aks` | AKS | `managed-csi` | KRO (real AKS: ships it) |
+| `kind-genaiops-eks` | EKS | `gp3` | **KRO** (real EKS ships none; Auto Mode provides the CSI driver) |
 
-The *only* thing that makes one cluster "GKE" and the other "AKS" is the
+The *only* thing that makes one cluster "GKE", another "AKS", another "EKS" is the
 platform-team config in `clouds/<cloud>/platform.yaml`: a single `ClusterPlatform`
 instance that **KRO** expands into that cluster's StorageClass *and* its
 `genaiops-platform-config` ConfigMap. The GenAIService RGD reads that ConfigMap (a
 read-only `externalRef`) and folds its `storageClass` into each workload's PVC — so
 KRO does the per-cluster resolution, and KRO owns the config it resolves from. Both
-`ResourceGraphDefinition`s are byte-identical on both clusters. The product instance
-is byte-identical on both.
+`ResourceGraphDefinition`s are byte-identical on all three clusters. The product
+instance is byte-identical on all three.
 
-> Everything runs GPU-free on a laptop. On real GKE/AKS clusters the only change
-> is the StorageClass provisioner (CSI driver); see `clouds/README.md`.
+> **100% KRO.** The only thing applied to each cluster is KRO — kro itself, the
+> RGDs, one `ClusterPlatform` instance, and the developer instances. Where the cloud
+> ships the class (GKE/AKS) KRO references it; where it doesn't (**EKS** — even Auto
+> Mode ships only the built-in EBS CSI *driver*) KRO **creates** it. Nothing is
+> hand-applied.
 
-> **Live demo on real clusters?** The contexts below (`kind-genaiops-gke/aks`) are
-> the local/CI flow. For the real-cloud live demo, provision GKE + AKS per
-> `docs/PROVISION-REAL-CLUSTERS.md` (which names the contexts **`gke`** and
-> **`aks`**) and run `./scripts/deploy-multicloud-real.sh` instead of the kind
-> setup below. Every beat after that is identical — just use `--context gke` /
-> `--context aks` in place of the `kind-genaiops-*` contexts.
+> Everything runs GPU-free on a laptop. On real clusters the only change is the
+> StorageClass provisioner (CSI driver); see `clouds/README.md`.
+
+> **Live demo on real clusters?** The contexts below (`kind-genaiops-gke/aks/eks`)
+> are the local/CI flow. For the real-cloud live demo, provision GKE + AKS + EKS
+> (Auto Mode) per `docs/PROVISION-REAL-CLUSTERS.md` (which names the contexts
+> **`gke`**, **`aks`**, **`eks`**) and run `./scripts/deploy-multicloud-real.sh`
+> (gke + aks) plus `./scripts/deploy-to-cluster.sh --context eks --cloud eks`.
+> Every beat after that is identical — just use the real contexts in place of the
+> `kind-genaiops-*` ones.
 
 ---
 
 ## T-minus (before you walk on)
 
 ```bash
-./scripts/setup-multicloud.sh        # ~4 min: two kind clusters, kro + RGD on each
+./scripts/setup-multicloud.sh        # ~6 min: three kind clusters, kro + RGDs on each
 ```
 
-Confirm both clouds are live:
+Confirm all three clouds are live:
 ```bash
 kubectl config get-contexts -o name | grep kind-genaiops
 ```
 
 ---
 
-## Beat 1 — Two clusters, two clouds (45s)
+## Beat 1 — Three clusters, three clouds (45s)
 
 Show that the clusters are genuinely different *environments*, labeled like real
 cloud nodes:
 ```bash
-kubectl --context kind-genaiops-gke get nodes -L topology.kubernetes.io/region,demo.genaiops/cloud
-kubectl --context kind-genaiops-aks get nodes -L topology.kubernetes.io/region,demo.genaiops/cloud
+for c in gke aks eks; do
+  kubectl --context kind-genaiops-$c get nodes -L topology.kubernetes.io/region,demo.genaiops/cloud
+done
 ```
 
 Now show the one platform-owned difference that matters — the storage choice
 KRO will read for each cluster:
 ```bash
-kubectl --context kind-genaiops-gke get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}{"\n"}'   # premium-rwo
-kubectl --context kind-genaiops-aks get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}{"\n"}'   # managed-csi
+for c in gke aks eks; do
+  echo -n "$c -> "
+  kubectl --context kind-genaiops-$c get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}{"\n"}'
+done
+# gke -> premium-rwo   aks -> managed-csi   eks -> gp3
 ```
-> "Two clouds. Each names its own storage class — exactly what that cloud calls
+> "Three clouds. Each names its own storage class — exactly what that cloud calls
 > it — in a ConfigMap the platform team owns. It lives in `clouds/`, not in any
 > template a developer touches. The RGD *reads* this; that's how KRO resolves the
 > environment per cluster."
+
+And — the 100%-KRO point — KRO *created* each of those classes, not a hand-applied
+manifest:
+```bash
+for c in gke aks eks; do
+  kubectl --context kind-genaiops-$c get sc -L app.kubernetes.io/managed-by | grep -E 'NAME|kro'
+done
+```
+> "On EKS this is the one that matters: a real EKS cluster ships no default class.
+> Auto Mode gives you the EBS CSI driver built in, and KRO creates the `gp3` class
+> itself — `managed-by: kro`. Same on all three: nothing applied but KRO."
 
 And the platform contract is the *same* on both:
 ```bash
@@ -108,16 +131,26 @@ kubectl --context kind-genaiops-aks get pvc sentiment-api-cache \
 > nine-line spec landed on AKS and bound to `managed-csi`. The product team did
 > nothing. The RGD didn't change. That's KRO as the portability layer."
 
-Prove it actually serves on the second cloud:
+And the third cloud — **EKS**, the one with no default class. Same file again:
+```bash
+kubectl --context kind-genaiops-eks apply -f instances/sentiment-api.yaml
+kubectl --context kind-genaiops-eks get pvc sentiment-api-cache \
+  -o jsonpath='{.spec.storageClassName}{"\n"}'      # -> gp3 (the class KRO created)
+```
+> "Same spec, third cloud. It bound to `gp3` — and here KRO didn't just *resolve*
+> the class, it *created* it. On a real EKS Auto Mode cluster that's the only
+> difference: provisioner `ebs.csi.eks.amazonaws.com`. Still nothing applied but KRO."
+
+Prove it actually serves on another cloud:
 ```bash
 kubectl --context kind-genaiops-aks port-forward svc/sentiment-api 8080:80 &
 curl -s localhost:8080/v1/chat/completions -X POST -d '{}' | jq .
 kill %1
 ```
 
-Optional side-by-side — the same object, healthy on both clouds at once:
+Side-by-side — the same object, healthy on all three clouds at once:
 ```bash
-for c in gke aks; do
+for c in gke aks eks; do
   echo "== $c =="; kubectl --context kind-genaiops-$c get genaiservice sentiment-api
 done
 ```
@@ -171,9 +204,11 @@ Open these three, in order:
 1. `instances/sentiment-api.yaml` — the product team. No cloud anywhere.
 2. `rgd/genaiops-rgd.yaml` — the platform contract. No cloud-specific *values*;
    it just *reads* the platform ConfigMap (`externalRef`) and resolves the class.
-3. `clouds/gke/platform.yaml` vs `clouds/aks/platform.yaml` — **the only files
-   that know about a cloud**: one `ClusterPlatform` instance each, which KRO
-   expands into that cluster's ConfigMap + StorageClass. They belong to the
+3. `clouds/gke/platform.yaml` vs `clouds/aks/platform.yaml` vs
+   `clouds/eks/platform.yaml` — **the only files that know about a cloud**: one
+   `ClusterPlatform` instance each (note EKS sets `manageStorageClass: true` — KRO
+   creates the class there), which KRO expands into that cluster's ConfigMap +
+   StorageClass. They belong to the
    platform team — and they're KRO objects too, so nothing is hand-applied.
 
 > "Environment detail didn't get pushed up to developers or baked into the

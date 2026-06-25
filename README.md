@@ -66,12 +66,13 @@ note at the bottom.
 | `monitoring/` | Lightweight Prometheus, MLflow, and the mock-vllm / mock-trainer / mock-drift image sources. |
 | `scripts/setup.sh` / `teardown.sh` | One-command cluster up/down for use-case 1 (kind). |
 | `scripts/setup-finetune.sh` / `teardown-finetune.sh` | Layered up/down for use-case 2 (additive, independent). |
-| `scripts/setup-multicloud.sh` / `teardown-multicloud.sh` | **The portability thesis, live (local).** Stands up two kind clusters that stand in for two clouds (GKE / AKS) and moves the same workload between them. |
+| `scripts/setup-multicloud.sh` / `teardown-multicloud.sh` | **The portability thesis, live (local).** Stands up three kind clusters that stand in for GKE / AKS / EKS and moves the same workload across them — KRO creates the StorageClass on the EKS sim. |
 | `scripts/deploy-to-cluster.sh` / `deploy-multicloud-real.sh` | **The portability thesis, live (real clouds).** Deploys the same RGDs onto already-provisioned GKE / AKS / EKS clusters via one `ClusterPlatform` instance — 100% KRO, nothing cloud-specific hand-applied. |
 | `clouds/` | **Platform-team environment config.** The only place cloud details live — one `ClusterPlatform` instance per cluster (`platform.yaml`) that KRO expands into the `genaiops-platform-config` ConfigMap and, where needed, the StorageClass. Never the RGD, never an instance. See `clouds/README.md`. |
 | `docs/MULTICLOUD.md` | **Minute-by-minute multi-cloud runbook.** Deploy one spec to "GKE", move it to "AKS", no diff. |
 | `docs/PROVISION-REAL-CLUSTERS.md` | **Runbook** to provision real GKE + AKS + EKS (Auto Mode) clusters and deploy the platform to each for the live demo. |
 | `docs/RUNBOOK.md` | **Minute-by-minute stage script.** Read this before presenting. |
+| `docs/RECORDING.md` | **Recording script** (multi-cloud, 100% KRO). Self-contained beats for recording the demo, incl. the EKS Auto Mode talking point. |
 | `docs/kubecon-deck.md` | KubeCon main-session deck (use-case 1), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/kubecon-deck.md -o deck.pptx`. |
 | `docs/maintainers-summit-deck.md` | Maintainers Summit deck (both use-cases), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/maintainers-summit-deck.md -o deck.pptx`. |
 
@@ -150,7 +151,7 @@ Each use-case runs independently, so you can show one or both:
 removes just use-case 2 (instances, RGD, MLflow) without touching use-case 1 or
 the cluster.
 
-## Simulating multi-cloud locally (deploy to "GKE" and "AKS")
+## Simulating multi-cloud locally (deploy to "GKE", "AKS", and "EKS")
 
 The headline takeaway — *deploy the same solution to multiple clouds* — is now
 runnable on a laptop, no cloud account or GPU required:
@@ -159,13 +160,15 @@ runnable on a laptop, no cloud account or GPU required:
 ./scripts/setup-multicloud.sh
 # Product team ships one spec — names no cloud, no storage class:
 kubectl --context kind-genaiops-gke apply -f instances/sentiment-api.yaml   # binds premium-rwo
-# Platform team moves the SAME spec to the other cloud — no edit:
+# Platform team moves the SAME spec to the other clouds — no edit:
 kubectl --context kind-genaiops-aks apply -f instances/sentiment-api.yaml   # binds managed-csi
+kubectl --context kind-genaiops-eks apply -f instances/sentiment-api.yaml   # binds gp3 (KRO-created)
 ```
 
-It stands up **two kind clusters that stand in for two clouds**
-(`kind-genaiops-gke`, `kind-genaiops-aks`). The clean separation is the whole
-point:
+It stands up **three kind clusters that stand in for GKE, AKS, and EKS**
+(`kind-genaiops-gke`, `kind-genaiops-aks`, `kind-genaiops-eks`). On the EKS sim,
+KRO *creates* the `gp3` class (mirroring EKS Auto Mode, where the cloud ships the
+CSI driver but no class). The clean separation is the whole point:
 
 - **Product teams** ship one ~9-line instance and never name a cloud or a
   StorageClass — so they never think about where it runs.
