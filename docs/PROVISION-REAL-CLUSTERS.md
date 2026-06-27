@@ -79,6 +79,14 @@ GKE ships the `premium-rwo` StorageClass by default → the deploy uses
 ## 2. AKS
 
 ```bash
+# One-time per subscription: register the AKS resource provider(s). A fresh
+# subscription will otherwise fail az aks create with
+# "(MissingSubscriptionRegistration) ... 'Microsoft.ContainerService'".
+for ns in Microsoft.ContainerService Microsoft.Compute Microsoft.Network Microsoft.Storage; do
+  az provider register --namespace "$ns" --wait
+done
+# Verify: az provider show --namespace Microsoft.ContainerService --query registrationState -o tsv  # -> Registered
+
 az group create --name genaiops-demo --location eastus
 
 az aks create --resource-group genaiops-demo --name genaiops-aks \
