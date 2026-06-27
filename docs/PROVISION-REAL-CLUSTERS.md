@@ -27,6 +27,20 @@ Authenticated CLIs on your laptop:
 - `gcloud` (logged in, a project set), `az` (logged in), `aws` + `eksctl`,
   `kubectl`, `helm`, `docker`.
 
+**Cluster-auth plugins** (modern `kubectl` shells out to these to authenticate):
+- **GKE** needs `gke-gcloud-auth-plugin` — it's *not* always installed with the
+  base SDK. Install it now so `get-credentials` → `kubectl` doesn't stall:
+  ```bash
+  gcloud components install gke-gcloud-auth-plugin
+  # Debian/Ubuntu apt install of gcloud instead:
+  #   sudo apt-get install google-cloud-cli-gke-gcloud-auth-plugin
+  gke-gcloud-auth-plugin --version          # verify
+  # Older gcloud only: export USE_GKE_GCLOUD_AUTH_PLUGIN=True
+  ```
+- **AKS** needs `kubelogin` only for Entra-ID (AAD)-enabled clusters —
+  `az aks install-cli` installs it.
+- **EKS** uses the `aws` CLI (above) for exec auth — nothing extra.
+
 Confirm the mock image is public and pullable (it lives in GHCR; the
 `publish-images` workflow pushes it). If this fails, make the GHCR packages public
 — github.com/users/danbruno101/packages → each `mock-*` package → *Change
@@ -52,6 +66,10 @@ gcloud container clusters get-credentials genaiops-gke --zone "${ZONE}"
 # Normalize the context name to `gke`:
 kubectl config rename-context "gke_${PROJECT}_${ZONE}_genaiops-gke" gke
 ```
+
+> If `kubectl` reports `gke-gcloud-auth-plugin … was not found`, install the plugin
+> (see **Prereqs → Cluster-auth plugins**) — `get-credentials` already wrote the
+> kubeconfig entry, so just install it and re-run the `kubectl` command.
 
 GKE ships the `premium-rwo` StorageClass by default → the deploy uses
 `manageStorageClass: false` and KRO just **references** it.
