@@ -26,10 +26,15 @@ the steps below rename them for you.
 Authenticated CLIs on your laptop:
 - `gcloud` (logged in, a project set), `az` (logged in), `aws` + `eksctl`,
   `kubectl`, `helm`, `docker`.
-- **EKS tooling:** install `eksctl` + `aws` if missing (macOS:
-  `brew install eksctl awscli`; Linux: see the eksctl/awscli docs), then
-  `aws configure` (or `aws sso login`) and confirm with `aws sts get-caller-identity`.
-  `--enable-auto-mode` (Section 3) needs **eksctl ≥ 0.199** — `eksctl version`;
+- **Install them if missing** — macOS (Homebrew), one shot:
+  ```bash
+  brew install kubectl helm eksctl awscli google-cloud-sdk azure-cli
+  # docker: install Docker Desktop (or `brew install --cask docker`)
+  ```
+  (Linux: use each tool's official install docs / your package manager.)
+- **Then authenticate:** `gcloud auth login`, `az login`, and
+  `aws configure` (or `aws sso login`) → confirm with `aws sts get-caller-identity`.
+- `--enable-auto-mode` (Section 3) needs **eksctl ≥ 0.199** — check `eksctl version`,
   `brew upgrade eksctl` if older.
 
 **Cluster-auth plugins** (modern `kubectl` shells out to these to authenticate):
