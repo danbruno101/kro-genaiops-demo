@@ -26,6 +26,16 @@ the steps below rename them for you.
 Authenticated CLIs on your laptop:
 - `gcloud` (logged in, a project set), `az` (logged in), `aws` + `eksctl`,
   `kubectl`, `helm`, `docker`.
+- **Install them if missing** — macOS (Homebrew), one shot:
+  ```bash
+  brew install kubectl helm eksctl awscli google-cloud-sdk azure-cli
+  # docker: install Docker Desktop (or `brew install --cask docker`)
+  ```
+  (Linux: use each tool's official install docs / your package manager.)
+- **Then authenticate:** `gcloud auth login`, `az login`, and
+  `aws configure` (or `aws sso login`) → confirm with `aws sts get-caller-identity`.
+- `--enable-auto-mode` (Section 3) needs **eksctl ≥ 0.199** — check `eksctl version`,
+  `brew upgrade eksctl` if older.
 
 **Cluster-auth plugins** (modern `kubectl` shells out to these to authenticate):
 - **GKE** needs `gke-gcloud-auth-plugin` — it's *not* always installed with the
@@ -79,6 +89,14 @@ GKE ships the `premium-rwo` StorageClass by default → the deploy uses
 ## 2. AKS
 
 ```bash
+# One-time per subscription: register the AKS resource provider(s). A fresh
+# subscription will otherwise fail az aks create with
+# "(MissingSubscriptionRegistration) ... 'Microsoft.ContainerService'".
+for ns in Microsoft.ContainerService Microsoft.Compute Microsoft.Network Microsoft.Storage; do
+  az provider register --namespace "$ns" --wait
+done
+# Verify: az provider show --namespace Microsoft.ContainerService --query registrationState -o tsv  # -> Registered
+
 az group create --name genaiops-demo --location eastus
 
 az aks create --resource-group genaiops-demo --name genaiops-aks \
