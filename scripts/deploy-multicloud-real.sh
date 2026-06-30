@@ -42,7 +42,7 @@ for entry in "${TARGETS[@]}"; do
     "${HERE}/deploy-to-cluster.sh" --context "${ctx}" --cloud "${cloud}"
     deployed+=("${ctx} ${cloud}")
   else
-    skip "Skipping ${cloud}: kube-context '${ctx}' not found (set ${cloud^^}_CONTEXT or provision it)."
+    skip "Skipping ${cloud}: kube-context '${ctx}' not found (set $(echo "${cloud}" | tr '[:lower:]' '[:upper:]')_CONTEXT or provision it)."
   fi
 done
 

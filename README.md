@@ -68,6 +68,7 @@ note at the bottom.
 | `scripts/setup-finetune.sh` / `teardown-finetune.sh` | Layered up/down for use-case 2 (additive, independent). |
 | `scripts/setup-multicloud.sh` / `teardown-multicloud.sh` | **The portability thesis, live (local).** Stands up three kind clusters that stand in for GKE / AKS / EKS and moves the same workload across them — KRO creates the StorageClass on the EKS sim. |
 | `scripts/deploy-to-cluster.sh` / `deploy-multicloud-real.sh` | **The portability thesis, live (real clouds).** Deploys the same RGDs onto already-provisioned GKE / AKS / EKS clusters via one `ClusterPlatform` instance — 100% KRO, nothing cloud-specific hand-applied. |
+| `scripts/call-service.sh` | **End-user's view.** Calls the `sentiment-api` OpenAI-compatible endpoint and reads its metrics across gke/aks/eks — the consumer side of the portability story. `--count N` drives the request counter; `--metrics` shows it. |
 | `clouds/` | **Platform-team environment config.** The only place cloud details live — one `ClusterPlatform` instance per cluster (`platform.yaml`) that KRO expands into the `genaiops-platform-config` ConfigMap and, where needed, the StorageClass. Never the RGD, never an instance. See `clouds/README.md`. |
 | `docs/MULTICLOUD.md` | **Minute-by-minute multi-cloud runbook.** Deploy one spec to "GKE", move it to "AKS", no diff. |
 | `docs/PROVISION-REAL-CLUSTERS.md` | **Runbook** to provision real GKE + AKS + EKS (Auto Mode) clusters and deploy the platform to each for the live demo. |
