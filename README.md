@@ -74,6 +74,7 @@ note at the bottom.
 | `docs/PROVISION-REAL-CLUSTERS.md` | **Runbook** to provision real GKE + AKS + EKS (Auto Mode) clusters and deploy the platform to each for the live demo. |
 | `docs/RUNBOOK.md` | **Minute-by-minute stage script.** Read this before presenting. |
 | `docs/RECORDING.md` | **Recording script** (multi-cloud, 100% KRO). Self-contained beats for recording the demo, incl. the EKS Auto Mode talking point. |
+| `docs/SIG-WALKTHROUGH.md` | **Live topology walkthrough** for the SIG meeting — four `kubectl` commands (with narration) over the deployed real GKE/AKS/EKS clusters. |
 | `docs/kubecon-deck.md` | KubeCon main-session deck (use-case 1), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/kubecon-deck.md -o deck.pptx`. |
 | `docs/maintainers-summit-deck.md` | Maintainers Summit deck (both use-cases), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/maintainers-summit-deck.md -o deck.pptx`. |
 
