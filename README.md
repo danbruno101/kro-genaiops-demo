@@ -77,6 +77,7 @@ note at the bottom.
 | `docs/SIG-WALKTHROUGH.md` | **Live topology walkthrough** for the SIG meeting — four `kubectl` commands (with narration) over the deployed real GKE/AKS/EKS clusters. |
 | `docs/kubecon-deck.md` | KubeCon main-session deck (use-case 1), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/kubecon-deck.md -o deck.pptx`. |
 | `docs/maintainers-summit-deck.md` | Maintainers Summit deck (both use-cases), Marp source. Render: `npx --yes @marp-team/marp-cli@latest docs/maintainers-summit-deck.md -o deck.pptx`. |
+| `docs/proposals/` | **Forward-looking design.** `KEP-kro-multicluster.md` (a strawman KEP proposing native multi-cluster/fleet-scoped KRO objects, built on SIG-Multicluster's ClusterProfile + multicluster-runtime) and the thin-PoC build prompt that backs it. Discussion-stage; not part of the demo. |
 
 ## The contrast, in numbers
 
