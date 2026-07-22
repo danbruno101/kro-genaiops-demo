@@ -144,6 +144,7 @@ spec:
                 prometheus.io/scrape: '${schema.spec.monitoring ? "true" : "false"}'
                 prometheus.io/port: "8000"
                 prometheus.io/path: "/metrics"
+                genaiops.kro.run/cache-claim: '${cache.metadata.name}'
             spec:
               containers:
                 - name: server
