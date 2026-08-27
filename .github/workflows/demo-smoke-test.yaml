@@ -22,10 +22,16 @@ jobs:
     env:
       CLUSTER: genaiops-ci
       # Pinned to a known-good kro release for deterministic CI.
-      # Verified against kubernetes-sigs/kro v0.9.1 (chart 0.9.1, Apr 2026).
+      # Verified against kubernetes-sigs/kro v0.9.3 (chart 0.9.3, Jul 2026).
       # Bump deliberately after confirming the demo still reconciles on the new
       # release; set to "" to instead resolve the latest release at run time.
-      KRO_VERSION: "0.9.1"
+      #
+      # Keep this at or above the version scripts/setup.sh installs. setup.sh
+      # resolves the LATEST release, so pinning CI too far behind hides real
+      # breakage from everyone following the README: v0.9.3 made
+      # status.conditions reserved and rejected this repo's RGD, while CI
+      # pinned at v0.9.1 stayed green.
+      KRO_VERSION: "0.9.3"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

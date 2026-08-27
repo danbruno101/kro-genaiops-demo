@@ -29,7 +29,7 @@ spec:
   name: code-assistant
   mode: mock          # flip to "gpu" on the keynote GPU cluster
   storageClass: ""    # gp3 on EKS, premium-rwo on GKE, managed-csi on AKS -- field, not rewrite
-  replicas: 2
+  replicas: 1         # >1 needs RWX: replicas share one ReadWriteOnce cache PVC
 ---
 # Team C — same template, "GKE profile": only the storageClass value differs.
 apiVersion: kro.run/v1alpha1
