@@ -52,6 +52,10 @@ spec:
       approved: boolean | default=false
 
       # --- Serving (post-approval) -------------------------------------------
+      # Keep at 1 unless storageClass is ReadWriteMany: serving replicas share
+      # the same RWO artifacts PVC, and RWO attaches to one node at a time, so a
+      # second replica elsewhere hangs in ContainerCreating (Multi-Attach).
+      # Single-node kind hides this; real multi-node clusters do not.
       servingReplicas: integer | default=1
       servingMode: string | default="mock"
       # Storage for the model-artifacts PVC (shared by training + serving).
@@ -236,6 +240,11 @@ spec:
             genaiops.kro.run/service: '${schema.spec.name}'
         spec:
           replicas: '${schema.spec.approved ? schema.spec.servingReplicas : 0}'
+          # Recreate, not RollingUpdate: serving pods mount the same
+          # ReadWriteOnce artifacts PVC, so a rolling update would try to attach
+          # it to a second node before the old pod released it.
+          strategy:
+            type: Recreate
           selector:
             matchLabels:
               app: '${schema.spec.name}'

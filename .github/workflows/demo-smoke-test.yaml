@@ -134,10 +134,14 @@ jobs:
           kubectl get svc sentiment-api
           kubectl get svc sentiment-api-metrics   # monitoring: true -> includeWhen fires
 
-          echo "Asserting replica count matches the instance (replicas: 2)..."
+          # Read the expected count off the instance instead of hardcoding it:
+          # this asserts kro PROPAGATED spec.replicas, and cannot drift when the
+          # instance changes.
+          want="$(kubectl get genaiservice sentiment-api -o jsonpath='{.spec.replicas}')"
+          echo "Asserting replica count matches the instance (replicas: ${want})..."
           ready="$(kubectl get deploy sentiment-api -o jsonpath='{.status.readyReplicas}')"
-          test "${ready}" = "2"
-          echo "OK: ${ready}/2 replicas ready."
+          test "${ready}" = "${want}"
+          echo "OK: ${ready}/${want} replicas ready."
 
       - name: Verify the served endpoint responds
         run: |
@@ -284,11 +288,13 @@ jobs:
           test -n "${ok}"
           echo "OK: MLflow has registered model 'sentiment-tuned'."
 
-          echo "Asserting auto-approval scaled serving up (replicas: 2)..."
+          # Expected count comes from the instance (see the sentiment-api step).
+          want="$(kubectl get finetunemodel sentiment-tuned -o jsonpath='{.spec.servingReplicas}')"
+          echo "Asserting auto-approval scaled serving up (replicas: ${want})..."
           kubectl wait --for=condition=Available deploy/sentiment-tuned --timeout=240s
           ready="$(kubectl get deploy sentiment-tuned -o jsonpath='{.status.readyReplicas}')"
-          test "${ready}" = "2"
-          echo "OK: ${ready}/2 replicas ready after auto-approval."
+          test "${ready}" = "${want}"
+          echo "OK: ${ready}/${want} replicas ready after auto-approval."
 
           echo "Asserting child resources exist..."
           kubectl get pvc sentiment-tuned-artifacts
