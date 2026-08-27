@@ -23,7 +23,11 @@ spec:
       # Required: human-facing knobs only. Everything else is platform default.
       name: string
       model: string | default="Qwen/Qwen2.5-0.5B-Instruct"
-      # replicas of the serving deployment
+      # Replicas of the serving deployment. Keep this at 1 unless the cluster's
+      # storageClass is ReadWriteMany: every replica mounts the same cache PVC,
+      # and RWO volumes attach to one node at a time, so a second replica
+      # scheduled elsewhere hangs in ContainerCreating with a Multi-Attach
+      # error. Single-node kind hides this; any real multi-node cluster shows it.
       replicas: integer | default=1
       # "mock" runs anywhere (CPU, zero GPU). "gpu" requests an accelerator.
       # This single field is the whole portability story on stage.
@@ -40,7 +44,22 @@ spec:
       # Surfaced back onto the GenAIService object for `kubectl get`.
       endpoint: '${service.spec.clusterIP}'
       readyReplicas: '${deployment.status.readyReplicas}'
-      conditions: '${deployment.status.conditions}'
+      # NOT named `conditions`: kro reserves status.conditions for the instance's
+      # own conditions and, since v0.9.3, rejects a graph that declares it as
+      # anything but a list ("status.conditions must be a list, got string").
+      # kro <= 0.9.2 accepted the collision silently but shadowed kro's own
+      # conditions; with this name they surface correctly on both versions.
+      #
+      # UPGRADING AN EXISTING CLUSTER: renaming a status field changes the
+      # generated CRD, and kro refuses breaking CRD updates ("KindReady: False,
+      # breaking changes detected"). Delete the generated CRD and the RGD, then
+      # re-apply -- instances of the kind go with it, so re-apply those too:
+      #   kubectl delete genaiservice --all
+      #   kubectl delete rgd genaiservice.kro.run
+      #   kubectl delete crd genaiservices.kro.run
+      #   kubectl apply -f rgd/genaiops-rgd.yaml
+      # Fresh clusters (scripts/setup.sh) are unaffected.
+      deploymentConditions: '${deployment.status.conditions}'
 
   # --- The resources the single API expands into -----------------------------
   # kro builds the resource graph from these definitions and writes the
@@ -132,6 +151,13 @@ spec:
             genaiops.kro.run/service: '${schema.spec.name}'
         spec:
           replicas: '${schema.spec.replicas}'
+          # Recreate, not RollingUpdate: every replica mounts the same
+          # ReadWriteOnce cache PVC. A rolling update would start the new pod
+          # before the old one released the volume, and on a multi-node cluster
+          # that lands them on different nodes -> "Multi-Attach error for
+          # volume", pod stuck in ContainerCreating. See replicas in the schema.
+          strategy:
+            type: Recreate
           selector:
             matchLabels:
               app: '${schema.spec.name}'

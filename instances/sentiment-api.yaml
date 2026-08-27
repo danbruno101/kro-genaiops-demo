@@ -10,5 +10,8 @@ metadata:
 spec:
   name: sentiment-api
   model: "Qwen/Qwen2.5-0.5B-Instruct"
-  replicas: 2
+  # 1, not 2: the replicas share one ReadWriteOnce cache PVC, which attaches to
+  # a single node. Two replicas work on single-node kind and deadlock on a real
+  # multi-node cluster (Multi-Attach). Raise this only with RWX storage.
+  replicas: 1
   monitoring: true
