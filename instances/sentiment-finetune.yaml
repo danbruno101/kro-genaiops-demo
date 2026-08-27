@@ -18,5 +18,7 @@ spec:
   epochs: 3
   approvalPolicy: auto       # auto-promote once eval_accuracy >= evalThreshold
   evalThreshold: "0.80"
-  servingReplicas: 2
+  # 1, not 2: serving replicas share one ReadWriteOnce artifacts PVC, which
+  # attaches to a single node. Raise this only with RWX storage.
+  servingReplicas: 1
   driftDetection: true

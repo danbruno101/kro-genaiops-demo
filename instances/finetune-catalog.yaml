@@ -38,7 +38,7 @@ spec:
   servingMode: mock          # flip to "gpu" on EKS
   storageClass: ""           # becomes "gp3" on EKS
   approvalPolicy: manual
-  servingReplicas: 2
+  servingReplicas: 1         # >1 needs RWX: replicas share one RWO artifacts PVC
 ---
 # Team C: GKE profile (GPU training + premium-rwo)
 apiVersion: kro.run/v1alpha1
