@@ -95,10 +95,11 @@ watch -n1 'kubectl --context kind-genaiops-gke get genaiservice,deploy,svc,pvc -
 > "One apply. KRO infers the graph — PVC, Deployment, Service, Prometheus wiring —
 > in dependency order. The developer wrote none of it."
 
-Prove the PVC bound to the KRO-created class, and that it serves:
+Prove the cache PVC bound to the KRO-created class, and that it serves (each
+replica has its own `<pod>-cache` PVC, so list by label):
 ```bash
-kubectl --context kind-genaiops-gke get pvc sentiment-api-cache \
-  -o jsonpath='{.spec.storageClassName}{"\n"}'                # premium-rwo
+kubectl --context kind-genaiops-gke get pvc -l app=sentiment-api \
+  -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName   # -> premium-rwo
 kubectl --context kind-genaiops-gke port-forward svc/sentiment-api 8080:80 &
 curl -s localhost:8080/v1/chat/completions -X POST -d '{}' | jq .
 kill %1
@@ -114,8 +115,8 @@ kubectl --context kind-genaiops-aks apply -f instances/sentiment-api.yaml
 kubectl --context kind-genaiops-eks apply -f instances/sentiment-api.yaml
 for c in gke aks eks; do
   echo -n "$c -> "
-  kubectl --context kind-genaiops-$c get pvc sentiment-api-cache \
-    -o jsonpath='{.spec.storageClassName}{"\n"}'
+  kubectl --context kind-genaiops-$c get genaiservice sentiment-api \
+    -o jsonpath='{.status.cacheStorageClasses}{"\n"}'   # read off the live per-replica PVCs
 done
 # gke -> premium-rwo   aks -> managed-csi   eks -> gp3 (KRO-created)
 ```

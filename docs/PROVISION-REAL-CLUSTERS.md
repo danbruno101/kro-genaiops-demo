@@ -167,9 +167,13 @@ done
 for c in gke aks eks; do
   kubectl --context $c apply -f instances/sentiment-api.yaml
   kubectl --context $c wait --for=condition=Available deploy/sentiment-api --timeout=180s
-  kubectl --context $c get pvc sentiment-api-cache -o jsonpath="{.spec.storageClassName}{\"\n\"}"
+  # one cache PVC per replica (named <pod>-cache) -- list by label, not by name
+  kubectl --context $c get pvc -l app=sentiment-api -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName
+  kubectl --context $c get genaiservice sentiment-api -o jsonpath='{.status.cacheStorageClasses}{"\n"}'
 done
 # expect: gke -> premium-rwo,  aks -> managed-csi,  eks -> gp3 (KRO-created)
+# These are real multi-node clusters: `replicas: 2` is safe here -- each replica
+# gets its own disk and lands on its own node (kubectl get pods -o wide).
 ```
 
 On EKS, confirm KRO created the class itself:

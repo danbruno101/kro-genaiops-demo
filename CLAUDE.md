@@ -25,10 +25,20 @@ placement PoC that reuses this repo's RGDs and mock images as its workload.
 - **Never name an RGD status field `conditions`** — reserved by kro ≥0.9.3, and
   on older versions it silently shadows the instance's own conditions. Use a
   distinct name (`deploymentConditions`).
-- **Replicas share a ReadWriteOnce PVC.** More than 1 replica works on
-  single-node kind and deadlocks with a Multi-Attach error on any multi-node
-  cluster. Keep instance `replicas: 1` (and `strategy: Recreate`) unless the
-  storage is RWX. This applies to both the serving and fine-tuning flows.
+- **GenAIService replicas each get their own cache disk.** The serving pod
+  template uses a generic ephemeral volume (`ephemeral.volumeClaimTemplate`),
+  so Kubernetes stamps one ReadWriteOnce PVC per pod (`<pod>-cache`, labelled
+  `app=<name>`) and replicas spread across nodes under RollingUpdate. kro
+  resolves the StorageClass into that template and reads the claims back via
+  the `modelCaches` externalRef collection (keep its `namespace`; without it kro
+  lists cluster-wide). Consequences to keep: the platform `storageClass` must
+  never be empty (`""` = no class = PVC Pending forever; kind writes
+  `standard`), and the cache does not survive its pod. Do not reintroduce a
+  shared named PVC or `strategy: Recreate` here.
+- **The fine-tuning flow still shares one RWO PVC.** `rgd/finetune-rgd.yaml`'s
+  artifacts PVC is the hand-off between the train Job and the serving
+  Deployment, so it must stay shared. Keep `servingReplicas: 1` (and
+  `strategy: Recreate`) there unless the storage is RWX.
 - Renaming a generated-CRD status field is a **breaking CRD change**: kro
   refuses the update and the CRD outlives the RGD. Migration steps are inline in
   `rgd/genaiops-rgd.yaml`.

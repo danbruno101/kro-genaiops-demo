@@ -179,8 +179,8 @@ CSI driver but no class). The clean separation is the whole point:
   `genaiops-platform-config` ConfigMap (and the StorageClass it names —
   `premium-rwo` for GKE, `managed-csi` for AKS). **KRO** resolves the per-cluster
   storage by reading that ConfigMap via a read-only `externalRef` and folding the
-  value into each workload's PVC. Moving a workload to another cloud is switching
-  the `kubectl --context`; the spec and the RGD don't change.
+  value into each replica's cache PVC. Moving a workload to another cloud is
+  switching the `kubectl --context`; the spec and the RGD don't change.
 
 The cloud-specific detail is isolated to `clouds/` (platform-team owned) — it
 never leaks into the RGD or any instance. Follow `docs/MULTICLOUD.md` for the
@@ -228,12 +228,26 @@ the template once, so developers never see them.
 ## Notes
 
 - kro API: `kro.run/v1alpha1`, `kind: ResourceGraphDefinition` (alpha).
-- **kro version:** CI is pinned to `v0.9.1` (chart `0.9.1`) via `KRO_VERSION` in
+- **kro version:** CI is pinned to `v0.9.4` (chart `0.9.4`) via `KRO_VERSION` in
   `.github/workflows/demo-smoke-test.yaml` for deterministic runs. To bump,
   change that value after confirming the demo still reconciles on the new
   release. `scripts/setup.sh` resolves the latest release at run time unless you
   export `KRO_VERSION=<x.y.z>` before running it (pin it on stage if you want
-  reproducibility).
+  reproducibility). The GenAIService RGD needs `>= 0.9.4` (externalRef
+  collections).
+- **Replicas and the model cache (serving):** each `GenAIService` replica gets
+  its **own** cache disk — the pod template declares a generic ephemeral volume,
+  so Kubernetes stamps one ReadWriteOnce PVC per pod (`<pod>-cache`, labelled
+  `app=<name>`) and the replicas spread across nodes. Scale `replicas` freely;
+  the trade-off is that a cache does not outlive its pod. List the disks with
+  `kubectl get pvc -l app=sentiment-api`, or read
+  `status.cacheStorageClasses` off the instance. Try it on a multi-node kind
+  cluster: `KIND_CONFIG=kind/multinode.yaml ./scripts/setup.sh`.
+- **Replicas and the artifacts PVC (fine-tuning):** `FineTuneModel` is different.
+  Its artifacts PVC is the hand-off between the training Job and the serving
+  Deployment, so it stays a single shared ReadWriteOnce claim. Keep
+  `servingReplicas: 1` unless the StorageClass is ReadWriteMany: a second serving
+  replica on another node hangs with a Multi-Attach error.
 - `mock-vllm` is stdlib-only Python; it serves `/health`, `/metrics`, and
   `/v1/chat/completions` so the demo runs GPU-free. In `gpu` mode the RGD swaps
   in `vllm/vllm-openai` with no other changes.
