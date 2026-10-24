@@ -84,7 +84,7 @@ The **only** things that change between clouds are field **values** (`mode`, `st
 
 | Cloud | mode | storageClass | Who provides the class? |
 |---|---|---|---|
-| **kind** — laptop · CPU | `mock` | *(cluster default)* | kind ships `standard` |
+| **kind** — laptop · CPU | `mock` | `standard` | kind ships it → KRO **references** |
 | **Google GKE** — GPU | `gpu` | `premium-rwo` | cloud ships it → KRO **references** |
 | **Azure AKS** — GPU | `gpu` | `managed-csi` | cloud ships it → KRO **references** |
 | **Amazon EKS** — GPU | `gpu` | `gp3` | none ships → KRO **creates** it ⟵ |

@@ -79,13 +79,14 @@ The identical `GenAIService` object, reconciled on each cluster.
 ```bash
 for c in gke aks eks; do
   echo -n "$c -> "
-  kubectl --context $c get pvc sentiment-api-cache -o jsonpath='{.spec.storageClassName}{"\n"}'
+  # one cache PVC per replica (named <pod>-cache) -- list by label, not by name
+  kubectl --context $c get pvc -l app=sentiment-api -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName
 done
 # gke -> premium-rwo   aks -> managed-csi   eks -> gp3
 ```
 
-The workload's PVC bound to each cloud's class — with zero changes to the
-developer's YAML.
+Every replica's cache PVC (one per pod, named `<pod>-cache`) bound to each
+cloud's class — with zero changes to the developer's YAML.
 
 > "And the workload's PVC bound to each cloud's class — premium-rwo, managed-csi,
 > gp3 — with no change to the developer's spec. Same YAML, resolved per cluster.

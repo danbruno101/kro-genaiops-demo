@@ -60,6 +60,6 @@ for entry in "${deployed[@]}"; do
     *)   note="" ;;
   esac
   printf "  kubectl --context %s apply -f instances/sentiment-api.yaml\n" "${ctx}"
-  printf "  kubectl --context %s get pvc sentiment-api-cache   # %s\n\n" "${ctx}" "${note}"
+  printf "  kubectl --context %s get pvc -l app=sentiment-api -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName   # %s\n\n" "${ctx}" "${note}"
 done
 echo "Full walkthrough: docs/MULTICLOUD.md"

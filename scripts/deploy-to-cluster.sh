@@ -109,6 +109,11 @@ for i in $(seq 1 30); do
   kubectl --context "${CTX}" get configmap genaiops-platform-config >/dev/null 2>&1 && break
   sleep 2
 done
+# The class name goes straight into each replica's cache volumeClaimTemplate;
+# empty would mean "no class" and the PVCs would never bind. Fail here instead.
+PLATFORM_SC="$(kubectl --context "${CTX}" get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}' 2>/dev/null || true)"
+[ -n "${PLATFORM_SC}" ] || { echo "ERROR: genaiops-platform-config on '${CTX}' has an empty storageClass."; exit 1; }
+note "Platform storageClass on ${CTX}: ${PLATFORM_SC}"
 
 if [ "${MANAGE}" = "true" ]; then
   note "manageStorageClass=true -> waiting for KRO to create StorageClass '${WANT_SC}'"
@@ -132,6 +137,7 @@ kubectl --context "${CTX}" wait --for=condition=Available deploy/prometheus --ti
 say "Ready on '${CTX}'. Deploy the unchanged developer spec with:"
 cat <<EOF
   kubectl --context ${CTX} apply -f instances/sentiment-api.yaml
-  kubectl --context ${CTX} get pvc sentiment-api-cache \\
-    -o jsonpath='{.spec.storageClassName}{"\\n"}'   # -> ${WANT_SC:-<cluster default>}
+  # one cache PVC per replica (named <pod>-cache), each on this cloud's class:
+  kubectl --context ${CTX} get pvc -l app=sentiment-api \\
+    -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName   # -> ${WANT_SC}
 EOF

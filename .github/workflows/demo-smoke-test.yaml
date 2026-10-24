@@ -1,9 +1,10 @@
 name: demo-smoke-test
 
-# Proves the GenAIOps demo actually works: stands up kind, installs kro from the
-# official chart, applies the RGD, creates a GenAIService instance, and asserts
-# that kro reconciled the underlying PVC / Deployment / Service. Green badge =
-# the abstraction in this repo holds against a real cluster.
+# Proves the GenAIOps demo actually works: stands up a multi-node kind cluster,
+# installs kro from the official chart, applies the RGD, creates a GenAIService
+# instance, and asserts that kro reconciled the underlying Deployment / Service
+# and that each replica got its own Bound cache PVC on the KRO-resolved class.
+# Green badge = the abstraction in this repo holds against a real cluster.
 
 on:
   push:
@@ -22,7 +23,7 @@ jobs:
     env:
       CLUSTER: genaiops-ci
       # Pinned to a known-good kro release for deterministic CI.
-      # Verified against kubernetes-sigs/kro v0.9.3 (chart 0.9.3, Jul 2026).
+      # Verified against kubernetes-sigs/kro v0.9.4 (chart 0.9.4, Oct 2026).
       # Bump deliberately after confirming the demo still reconciles on the new
       # release; set to "" to instead resolve the latest release at run time.
       #
@@ -30,16 +31,21 @@ jobs:
       # resolves the LATEST release, so pinning CI too far behind hides real
       # breakage from everyone following the README: v0.9.3 made
       # status.conditions reserved and rejected this repo's RGD, while CI
-      # pinned at v0.9.1 stayed green.
-      KRO_VERSION: "0.9.3"
+      # pinned at v0.9.1 stayed green. Per-replica caches (externalRef
+      # collections, schema.metadata.namespace) need >= 0.9.4.
+      KRO_VERSION: "0.9.4"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install kind
+      - name: Install kind (1 control plane + 2 workers)
         uses: helm/kind-action@v1
         with:
           cluster_name: genaiops-ci
+          # Multi-node on purpose: it is where a shared ReadWriteOnce cache
+          # deadlocked (Multi-Attach), and where the per-replica ephemeral
+          # cache has to prove replicas land on different nodes.
+          config: kind/multinode.yaml
           wait: 60s
 
       - name: Install Helm
@@ -90,12 +96,18 @@ jobs:
         run: |
           # The genaiops-platform-config ConfigMap the GenAIService RGD reads
           # (externalRef) is now created BY KRO from a ClusterPlatform instance --
-          # not hand-applied. clouds/kind has manageStorageClass:false (empty class
-          # -> inherit kind's default), proving the externalRef path works when the
-          # ConfigMap itself is KRO-owned. Wait for KRO to create it.
+          # not hand-applied. clouds/kind names kind's built-in `standard` class
+          # with manageStorageClass:false (KRO references it, creates nothing),
+          # proving the externalRef path works when the ConfigMap itself is
+          # KRO-owned. The class MUST be non-empty: it goes straight into each
+          # replica's cache volumeClaimTemplate. Wait for KRO to create it.
           kubectl apply -f clouds/kind/platform.yaml
           for i in $(seq 1 30); do
-            kubectl get configmap genaiops-platform-config >/dev/null 2>&1 && { echo "ConfigMap created by KRO."; exit 0; }
+            if kubectl get configmap genaiops-platform-config >/dev/null 2>&1; then
+              sc="$(kubectl get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}')"
+              test -n "${sc}" || { echo "::error::platform storageClass is empty"; exit 1; }
+              echo "ConfigMap created by KRO (storageClass=${sc})."; exit 0
+            fi
             echo "waiting for KRO to create the ConfigMap... ($i)"; sleep 4
           done
           echo "::error::ClusterPlatform never created the ConfigMap"
@@ -129,7 +141,16 @@ jobs:
             --timeout=180s
 
           echo "Asserting all expected child resources exist..."
-          kubectl get pvc sentiment-api-cache
+          # The cache is a per-pod ephemeral volume: one PVC per replica, named
+          # <pod>-cache and labelled app=sentiment-api. Kubernetes creates them
+          # from the template kro rendered, so list by label, not by name.
+          kubectl get pvc -l app=sentiment-api \
+            -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,CLASS:.spec.storageClassName
+          bound="$(kubectl get pvc -l app=sentiment-api -o jsonpath='{range .items[?(@.status.phase=="Bound")]}{.metadata.name}{"\n"}{end}' | wc -l | tr -d ' ')"
+          test "${bound}" -ge 1
+          classes="$(kubectl get pvc -l app=sentiment-api -o jsonpath='{.items[*].spec.storageClassName}' | tr ' ' '\n' | sort -u)"
+          test "${classes}" = "standard"
+          echo "OK: ${bound} Bound cache PVC(s), all on StorageClass standard."
           kubectl get deploy sentiment-api
           kubectl get svc sentiment-api
           kubectl get svc sentiment-api-metrics   # monitoring: true -> includeWhen fires
@@ -163,6 +184,52 @@ jobs:
           done
           test -n "${ok}"
 
+      - name: Scale to 2 replicas -> two Bound per-replica PVCs on two nodes
+        run: |
+          set -e
+          # This is the reliability fix under test: with a shared RWO claim a
+          # second replica on another node hung in ContainerCreating with a
+          # Multi-Attach error. With per-pod ephemeral volumes each replica gets
+          # its own Bound PVC and the topology spread puts them on different nodes.
+          kubectl patch genaiservice sentiment-api --type merge -p '{"spec":{"replicas":2}}'
+          echo "Waiting for kro to propagate replicas=2 and the rollout to finish..."
+          for i in $(seq 1 45); do
+            want="$(kubectl get deploy sentiment-api -o jsonpath='{.spec.replicas}')"
+            [ "${want}" = "2" ] && break
+            echo "deployment still at replicas=${want}... ($i)"; sleep 4
+          done
+          test "${want}" = "2"
+          kubectl rollout status deploy/sentiment-api --timeout=180s
+
+          kubectl get pvc -l app=sentiment-api \
+            -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,CLASS:.spec.storageClassName
+          bound="$(kubectl get pvc -l app=sentiment-api -o jsonpath='{range .items[?(@.status.phase=="Bound")]}{.metadata.name}{"\n"}{end}' | wc -l | tr -d ' ')"
+          test "${bound}" = "2"
+          echo "OK: 2 replicas -> 2 Bound cache PVCs."
+
+          kubectl get pods -l app=sentiment-api -o wide
+          nodes="$(kubectl get pods -l app=sentiment-api --field-selector=status.phase=Running -o jsonpath='{.items[*].spec.nodeName}' | tr ' ' '\n' | sort -u | wc -l | tr -d ' ')"
+          test "${nodes}" = "2"
+          echo "OK: the 2 replicas run on 2 different nodes."
+
+          echo "Asserting status.cacheStorageClasses reports both disks..."
+          for i in $(seq 1 30); do
+            got="$(kubectl get genaiservice sentiment-api -o jsonpath='{.status.cacheStorageClasses}')"
+            [ "${got}" = "standard,standard" ] && break
+            echo "status.cacheStorageClasses='${got}'... ($i)"; sleep 4
+          done
+          test "${got}" = "standard,standard"
+          echo "OK: status.cacheStorageClasses=${got}"
+
+          echo "Deleting the Deployment by hand; kro must recreate it..."
+          kubectl delete deploy sentiment-api --wait=true
+          for i in $(seq 1 45); do
+            kubectl get deploy sentiment-api >/dev/null 2>&1 && break
+            echo "waiting for kro to recreate the Deployment... ($i)"; sleep 4
+          done
+          kubectl rollout status deploy/sentiment-api --timeout=180s
+          echo "OK: kro recreated the Deployment and it is Available again."
+
       - name: Smoke-test the catalog (multi-cloud profiles apply cleanly)
         run: |
           kubectl apply -f instances/catalog.yaml
@@ -192,7 +259,7 @@ jobs:
     timeout-minutes: 25
     env:
       CLUSTER: genaiops-ci-ft
-      KRO_VERSION: "0.9.1"
+      KRO_VERSION: "0.9.4"   # keep in step with the smoke job (see its comment)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -371,7 +438,7 @@ jobs:
     timeout-minutes: 15
     env:
       CLUSTER: genaiops-ci-sc
-      KRO_VERSION: "0.9.1"
+      KRO_VERSION: "0.9.4"   # keep in step with the smoke job (see its comment)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -441,19 +508,25 @@ jobs:
       - name: Apply an UNCHANGED instance (no storageClass field)
         run: |
           # instances/sentiment-api.yaml never names a StorageClass. KRO reads the
-          # KRO-created ConfigMap, so the PVC must come out storageClassName=gp3 --
-          # the very class KRO itself created. End-to-end, 100% KRO.
+          # KRO-created ConfigMap, so every replica's cache PVC must come out
+          # storageClassName=gp3 -- the very class KRO itself created. End-to-end,
+          # 100% KRO.
           kubectl apply -f instances/sentiment-api.yaml
 
       - name: Assert the PVC binds to the KRO-created class and serves
         run: |
           set -e
-          echo "Waiting for KRO to create the PVC..."
+          # The cache PVC is stamped per pod from the ephemeral volume template
+          # kro rendered (named <pod>-cache, labelled app=sentiment-api).
+          echo "Waiting for the per-replica cache PVC to appear..."
           for i in $(seq 1 45); do
-            if kubectl get pvc sentiment-api-cache >/dev/null 2>&1; then break; fi
+            n="$(kubectl get pvc -l app=sentiment-api -o name | wc -l | tr -d ' ')"
+            [ "${n}" -ge 1 ] && break
             echo "waiting for PVC... ($i)"; sleep 4
           done
-          scn="$(kubectl get pvc sentiment-api-cache -o jsonpath='{.spec.storageClassName}')"
+          kubectl get pvc -l app=sentiment-api \
+            -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,CLASS:.spec.storageClassName
+          scn="$(kubectl get pvc -l app=sentiment-api -o jsonpath='{.items[*].spec.storageClassName}' | tr ' ' '\n' | sort -u)"
           echo "PVC storageClassName resolved to: '${scn}'"
           test "${scn}" = "gp3"
           echo "OK: KRO resolved the StorageClass it created from the ConfigMap it created."

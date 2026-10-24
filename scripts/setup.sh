@@ -7,6 +7,10 @@ set -euo pipefail
 
 CLUSTER="${CLUSTER:-genaiops-demo}"
 KRO_VERSION="${KRO_VERSION:-}"   # empty = latest release
+# Optional kind config, e.g. KIND_CONFIG=kind/multinode.yaml for a 1+2-node
+# cluster that shows GenAIService replicas spreading across nodes, each with
+# its own cache PVC. Empty = kind's default single node.
+KIND_CONFIG="${KIND_CONFIG:-}"
 
 say() { printf "\n\033[1;36m▶ %s\033[0m\n" "$*"; }
 need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1"; exit 1; }; }
@@ -15,7 +19,8 @@ need kind; need kubectl; need helm
 
 say "Creating kind cluster: ${CLUSTER}"
 if ! kind get clusters 2>/dev/null | grep -qx "${CLUSTER}"; then
-  kind create cluster --name "${CLUSTER}" --wait 60s
+  # shellcheck disable=SC2086
+  kind create cluster --name "${CLUSTER}" ${KIND_CONFIG:+--config "${KIND_CONFIG}"} --wait 60s
 else
   echo "Cluster already exists, reusing."
 fi
@@ -64,14 +69,20 @@ for i in $(seq 1 30); do
 done
 
 say "Applying the ClusterPlatform instance (KRO creates the platform config)"
-# On a laptop kind cluster this just creates genaiops-platform-config with an
-# empty storageClass (inherit kind's default). KRO -- not a hand-applied manifest
-# -- now owns it. Wait for it before any GenAIService reconciles (externalRef).
+# On a laptop kind cluster this just creates genaiops-platform-config naming
+# kind's built-in `standard` class. KRO -- not a hand-applied manifest -- now
+# owns it. Wait for it before any GenAIService reconciles (externalRef).
 kubectl apply -f "${REPO}/clouds/kind/platform.yaml"
 for i in $(seq 1 30); do
   kubectl get configmap genaiops-platform-config >/dev/null 2>&1 && break
   sleep 2
 done
+# The GenAIService RGD writes this value straight into each replica's cache
+# volumeClaimTemplate; an empty storageClassName there means "no class" and the
+# PVCs never bind. Fail loudly here rather than with Pending pods later.
+PLATFORM_SC="$(kubectl get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}' 2>/dev/null || true)"
+[ -n "${PLATFORM_SC}" ] || { echo "ERROR: genaiops-platform-config has an empty storageClass; GenAIService cache PVCs would never bind."; exit 1; }
+echo "Platform storageClass for this cluster: ${PLATFORM_SC}"
 
 say "Setup complete. The new API is ready:"
 kubectl get rgd

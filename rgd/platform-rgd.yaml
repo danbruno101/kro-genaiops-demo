@@ -37,8 +37,13 @@ spec:
     spec:
       # Cosmetic: labels the emitted objects with the cloud they represent.
       cloud: string | default="kind"
-      # The class name GenAI workloads use on this cluster. Empty -> inherit the
-      # cluster default (e.g. base kind). Written into the ConfigMap KRO reads.
+      # The class name GenAI workloads use on this cluster. Written into the
+      # ConfigMap KRO reads. MUST be non-empty: the GenAIService RGD puts it
+      # straight into each replica's ephemeral volumeClaimTemplate, and an empty
+      # storageClassName there means "no class" -> the PVC never binds. On base
+      # kind that is `standard`; on the clouds premium-rwo / managed-csi / gp3.
+      # (The schema default stays "" so the generated CRD is unchanged; every
+      # ClusterPlatform instance in clouds/ and the deploy scripts sets it.)
       storageClass: string | default=""
       # true  -> KRO creates the StorageClass below (EKS, or any kind sim).
       # false -> the class already exists on the cluster (GKE/AKS); ConfigMap only.
@@ -72,6 +77,10 @@ spec:
             app.kubernetes.io/managed-by: kro
         data:
           storageClass: '${schema.spec.storageClass}'
+          # Whether KRO created the class above ("true") or merely references a
+          # class the cloud ships ("false"). Stringified because ConfigMap data
+          # is string-only. Read by the GenAIService observability conditions.
+          manageStorageClass: '${schema.spec.manageStorageClass ? "true" : "false"}'
 
     # Created ONLY where the cloud doesn't ship the class (EKS, kind sims).
     - id: storageClass

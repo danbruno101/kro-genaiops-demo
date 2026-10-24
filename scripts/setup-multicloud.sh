@@ -82,8 +82,8 @@ provision() {
   kind load docker-image ghcr.io/danbruno101/mock-vllm:demo --name "${cluster}" >/dev/null
 
   note "Demoting kind's built-in 'standard' so the cloud-named class is the sole default"
-  # Sim scaffolding only (real GKE/AKS have no kind 'standard'); PVCs name the
-  # class explicitly via the ConfigMap, so this is cosmetic for `kubectl get sc`.
+  # Sim scaffolding only (real GKE/AKS have no kind 'standard'); every cache PVC
+  # names the class explicitly via the ConfigMap, so this is cosmetic for `kubectl get sc`.
   if kubectl --context "${ctx}" get storageclass standard >/dev/null 2>&1; then
     kubectl --context "${ctx}" patch storageclass standard \
       -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"false"}}}' >/dev/null
@@ -107,6 +107,12 @@ provision() {
     kubectl --context "${ctx}" get configmap genaiops-platform-config >/dev/null 2>&1 && break
     sleep 2
   done
+  # The class name goes straight into each replica's cache volumeClaimTemplate;
+  # empty would mean "no class" and the PVCs would never bind. Fail here instead.
+  local sc
+  sc="$(kubectl --context "${ctx}" get configmap genaiops-platform-config -o jsonpath='{.data.storageClass}' 2>/dev/null || true)"
+  [ -n "${sc}" ] || { echo "ERROR: [${cloud}] genaiops-platform-config has an empty storageClass."; exit 1; }
+  note "Platform storageClass on ${ctx}: ${sc}"
 
   note "Deploying Prometheus (monitoring beat)"
   kubectl --context "${ctx}" apply -f "${REPO}/monitoring/prometheus.yaml" >/dev/null
@@ -131,17 +137,21 @@ cat <<'EOF'
 The platform is ready on ALL THREE clusters. Now show the thesis:
 
   # Product team ships ONE spec — it never names a cloud or a StorageClass.
+  # Each replica gets its own cache PVC (named <pod>-cache), so list by label.
   kubectl --context kind-genaiops-gke apply -f instances/sentiment-api.yaml
-  kubectl --context kind-genaiops-gke get pvc sentiment-api-cache   # bound to premium-rwo
+  kubectl --context kind-genaiops-gke get pvc -l app=sentiment-api \
+    -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName   # premium-rwo
 
   # Platform team MOVES the same workload to another cloud. Same file. No diff.
   kubectl --context kind-genaiops-aks apply -f instances/sentiment-api.yaml
-  kubectl --context kind-genaiops-aks get pvc sentiment-api-cache   # bound to managed-csi
+  kubectl --context kind-genaiops-aks get pvc -l app=sentiment-api \
+    -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName   # managed-csi
 
   # And EKS — where KRO CREATED the gp3 class itself (EKS ships none; Auto Mode
   # provides the CSI driver). Same file again, no diff.
   kubectl --context kind-genaiops-eks apply -f instances/sentiment-api.yaml
-  kubectl --context kind-genaiops-eks get pvc sentiment-api-cache   # bound to gp3 (KRO-created)
+  kubectl --context kind-genaiops-eks get pvc -l app=sentiment-api \
+    -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName   # gp3 (KRO-created)
 
 Full walkthrough: docs/MULTICLOUD.md     Tear down: ./scripts/teardown-multicloud.sh
 EOF

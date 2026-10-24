@@ -20,7 +20,8 @@ It exists to keep the demo's central rule honest:
 A product team writes `instances/sentiment-api.yaml` once and leaves
 `storageClass` empty. **KRO** resolves the real value per cluster: the RGD
 reads `genaiops-platform-config` (this folder's ConfigMap) as a read-only
-`externalRef` and folds its `storageClass` into the PVC. The platform team sets
+`externalRef` and folds its `storageClass` into the pod's ephemeral cache
+volume, so each replica's PVC is stamped with it. The platform team sets
 that value per cluster by applying the manifests in the matching folder here.
 The same product YAML therefore lands on a "GKE" cluster and binds to
 `premium-rwo`, or on an "AKS" cluster and binds to `managed-csi` — and the
@@ -32,8 +33,11 @@ cloud they were on.
 > thing that resolves the environment, keeps the platform's intent explicit and
 > auditable (`kubectl get configmap genaiops-platform-config`), and decouples
 > "the class GenAI workloads use" from "the cluster-wide default class." The
-> resolution precedence is: developer override (`spec.storageClass`) → this
-> ConfigMap's value → cluster default (when both are empty).
+> resolution precedence is two rungs: developer override (`spec.storageClass`)
+> → this ConfigMap's value. There is deliberately no "cluster default" rung:
+> the value lands in a pod template, which cannot omit `storageClassName`
+> conditionally, and an empty value means *no* class (PVCs never bind). So
+> every ClusterPlatform names its class — plain kind writes `standard`.
 
 ## What's in each folder
 

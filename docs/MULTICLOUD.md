@@ -109,10 +109,11 @@ kubectl --context kind-genaiops-gke apply -f instances/sentiment-api.yaml
 kubectl --context kind-genaiops-gke get genaiservice,deploy,svc,pvc -l app=sentiment-api
 ```
 
-Prove the PVC bound to **GKE's** storage — which the product team never named:
+Prove the cache PVC bound to **GKE's** storage — which the product team never
+named. (Each replica gets its own cache PVC, named `<pod>-cache`, so list by label.)
 ```bash
-kubectl --context kind-genaiops-gke get pvc sentiment-api-cache \
-  -o jsonpath='{.spec.storageClassName}{"\n"}'      # -> premium-rwo
+kubectl --context kind-genaiops-gke get pvc -l app=sentiment-api \
+  -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName   # -> premium-rwo
 ```
 > "The instance left storage unspecified, so KRO resolved it from this cluster's
 > platform ConfigMap. On this cloud that's `premium-rwo`. The developer never knew."
@@ -124,8 +125,8 @@ kubectl --context kind-genaiops-gke get pvc sentiment-api-cache \
 Same file. Different cloud. No edit:
 ```bash
 kubectl --context kind-genaiops-aks apply -f instances/sentiment-api.yaml
-kubectl --context kind-genaiops-aks get pvc sentiment-api-cache \
-  -o jsonpath='{.spec.storageClassName}{"\n"}'      # -> managed-csi
+kubectl --context kind-genaiops-aks get pvc -l app=sentiment-api \
+  -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName   # -> managed-csi
 ```
 > "I changed the *context* — the destination cloud — and nothing else. The same
 > nine-line spec landed on AKS and bound to `managed-csi`. The product team did
@@ -134,8 +135,8 @@ kubectl --context kind-genaiops-aks get pvc sentiment-api-cache \
 And the third cloud — **EKS**, the one with no default class. Same file again:
 ```bash
 kubectl --context kind-genaiops-eks apply -f instances/sentiment-api.yaml
-kubectl --context kind-genaiops-eks get pvc sentiment-api-cache \
-  -o jsonpath='{.spec.storageClassName}{"\n"}'      # -> gp3 (the class KRO created)
+kubectl --context kind-genaiops-eks get pvc -l app=sentiment-api \
+  -o custom-columns=NAME:.metadata.name,CLASS:.spec.storageClassName   # -> gp3 (the class KRO created)
 ```
 > "Same spec, third cloud. It bound to `gp3` — and here KRO didn't just *resolve*
 > the class, it *created* it. On a real EKS Auto Mode cluster that's the only
@@ -190,11 +191,15 @@ or ship a Helm chart."* Here's why that's not the same thing — say all three:
 
 **How the value gets resolved:** KRO reads the per-cluster
 `genaiops-platform-config` ConfigMap (a read-only `externalRef` in the RGD) and
-folds its `storageClass` into the PVC. So the resolution is KRO's, not an
+folds its `storageClass` into the pod template's ephemeral cache volume, so
+every replica's PVC is stamped with it. So the resolution is KRO's, not an
 implicit Kubernetes default — the same RGD and instance on every cluster, the
-value supplied by a platform-owned object KRO consumes. The precedence is
-developer override → platform ConfigMap → cluster default (when both empty), so
-the zero-config path still works on a plain laptop kind cluster.
+value supplied by a platform-owned object KRO consumes. The precedence is two
+rungs: developer override → platform ConfigMap. There is no "cluster default"
+fallback, because a pod template cannot omit `storageClassName` conditionally
+and an empty value means *no* class; every `ClusterPlatform` therefore names
+its class (plain laptop kind writes `standard`). The instance's
+`status.cacheStorageClasses` reads the class back off the live PVCs.
 
 ---
 

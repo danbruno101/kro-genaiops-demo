@@ -25,16 +25,17 @@ Preflight — every row must be populated:
 ```bash
 for c in gke aks eks; do
   printf "%-4s sc=%-12s ready=%-4s\n" "$c" \
-    "$(kubectl --context $c get pvc sentiment-api-cache -o jsonpath='{.spec.storageClassName}' 2>/dev/null)" \
+    "$(kubectl --context $c get genaiservice sentiment-api -o jsonpath='{.status.cacheStorageClasses}' 2>/dev/null)" \
     "$(kubectl --context $c get deploy sentiment-api -o jsonpath='{.status.readyReplicas}/{.spec.replicas}' 2>/dev/null)"
 done
 # verified 2026-08-25 on real clusters:
 #   gke premium-rwo 1/1 | aks managed-csi 1/1 | eks gp3 1/1
 ```
 
-> `replicas: 1` is deliberate — the replicas share one ReadWriteOnce cache PVC,
-> so a second replica on another node hangs with a Multi-Attach error. Single-node
-> kind hides this; real multi-node clusters do not.
+> Replicas are safe to raise on these multi-node clusters: each replica gets its
+> own cache PVC (`<pod>-cache`, a generic ephemeral volume) and the pods spread
+> across nodes. `sc=` above is read off those live PVCs via
+> `status.cacheStorageClasses`, so with `replicas: 2` expect e.g. `premium-rwo,premium-rwo`.
 
 Open these four tabs in advance (demo insurance — no navigation on stage):
 
