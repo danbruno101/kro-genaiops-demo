@@ -57,7 +57,9 @@ fi
 
 bold() { printf "\n\033[1;36m▶ %s\033[0m\n" "$*"; }
 dim()  { printf "  \033[2m%s\033[0m\n" "$*"; }
-has_context() { kubectl config get-contexts -o name 2>/dev/null | grep -qx "$1"; }
+# Positional lookup, not `-o name | grep -q`: under pipefail grep -q closes the
+# pipe early and kubectl's SIGPIPE exit made existing contexts look missing.
+has_context() { kubectl config get-contexts "$1" >/dev/null 2>&1; }
 
 PF_PID=""
 pf_up() {   # $1=context ; background a port-forward and wait for /health
