@@ -1,0 +1,13 @@
+# Three-node kind cluster (1 control plane + 2 workers). Use it to see what a
+# real multi-node cluster does with GenAIService replicas: each replica gets its
+# own per-pod cache PVC and the topology spread lands them on different nodes.
+#
+#   KIND_CONFIG=kind/multinode.yaml ./scripts/setup.sh
+#
+# CI (demo-smoke-test, job `smoke`) runs on this config too.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
