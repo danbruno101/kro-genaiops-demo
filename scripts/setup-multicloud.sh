@@ -75,6 +75,8 @@ provision() {
     oci://registry.k8s.io/kro/charts/kro \
     --namespace kro --create-namespace \
     ${KRO_VERSION:+--version "${KRO_VERSION}"} \
+    --set config.featureGates.InstanceConditionMetrics=true \
+    --set config.featureGates.InstanceConditionEvents=true \
     --wait >/dev/null || note "kro may already be installed; continuing."
   kubectl --context "${ctx}" wait --for=condition=Available deploy -n kro --all --timeout=120s || true
 

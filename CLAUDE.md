@@ -22,9 +22,8 @@ placement PoC that reuses this repo's RGDs and mock images as its workload.
   must be at or above what setup.sh installs**, or CI stays green while every
   README follower is broken. This happened: kro v0.9.3 made `status.conditions`
   reserved and rejected the RGD while CI (pinned 0.9.1) stayed green.
-- **Never name an RGD status field `conditions`** — reserved by kro ≥0.9.3, and
-  on older versions it silently shadows the instance's own conditions. Use a
-  distinct name (`deploymentConditions`).
+- **RGD `status.conditions` is kro's custom-conditions list.** Declaring it
+  replaces kro's built-in instance conditions, so always define `Ready` in it.
 - **GenAIService replicas each get their own cache disk.** The serving pod
   template uses a generic ephemeral volume (`ephemeral.volumeClaimTemplate`),
   so Kubernetes stamps one ReadWriteOnce PVC per pod (`<pod>-cache`, labelled

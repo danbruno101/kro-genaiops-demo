@@ -66,6 +66,8 @@ jobs:
           helm install kro oci://registry.k8s.io/kro/charts/kro \
             --namespace kro --create-namespace \
             ${KRO_VERSION:+--version "${KRO_VERSION}"} \
+            --set config.featureGates.InstanceConditionMetrics=true \
+            --set config.featureGates.InstanceConditionEvents=true \
             --wait --timeout 5m
           kubectl wait --for=condition=Available deploy -n kro --all --timeout=180s
 
@@ -288,6 +290,8 @@ jobs:
           helm install kro oci://registry.k8s.io/kro/charts/kro \
             --namespace kro --create-namespace \
             ${KRO_VERSION:+--version "${KRO_VERSION}"} \
+            --set config.featureGates.InstanceConditionMetrics=true \
+            --set config.featureGates.InstanceConditionEvents=true \
             --wait --timeout 5m
           kubectl wait --for=condition=Available deploy -n kro --all --timeout=180s
 
@@ -457,6 +461,8 @@ jobs:
           helm install kro oci://registry.k8s.io/kro/charts/kro \
             --namespace kro --create-namespace \
             ${KRO_VERSION:+--version "${KRO_VERSION}"} \
+            --set config.featureGates.InstanceConditionMetrics=true \
+            --set config.featureGates.InstanceConditionEvents=true \
             --wait --timeout 5m
           kubectl wait --for=condition=Available deploy -n kro --all --timeout=180s
 
