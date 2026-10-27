@@ -75,6 +75,8 @@ helm --kube-context "${CTX}" upgrade --install kro \
   oci://registry.k8s.io/kro/charts/kro \
   --namespace kro --create-namespace \
   ${KRO_VERSION:+--version "${KRO_VERSION}"} \
+  --set config.featureGates.InstanceConditionMetrics=true \
+  --set config.featureGates.InstanceConditionEvents=true \
   --wait || note "kro may already be installed; continuing."
 kubectl --context "${CTX}" wait --for=condition=Available deploy -n kro --all --timeout=180s || true
 

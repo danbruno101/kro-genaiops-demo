@@ -37,6 +37,8 @@ echo "Using kro version: ${KRO_VERSION:-<latest-resolved-failed>}"
 helm install kro oci://registry.k8s.io/kro/charts/kro \
   --namespace kro --create-namespace \
   ${KRO_VERSION:+--version "${KRO_VERSION}"} \
+  --set config.featureGates.InstanceConditionMetrics=true \
+  --set config.featureGates.InstanceConditionEvents=true \
   --wait || echo "kro may already be installed; continuing."
 
 say "Waiting for kro controller to be Ready"
